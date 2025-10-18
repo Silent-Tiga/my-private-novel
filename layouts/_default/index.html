@@ -1,0 +1,33 @@
+{{ define "main" }}
+<h1>小说集</h1>
+<div class="novel-collections">
+  {{ range where .Site.Sections "Type" "novel-collections" }}
+    <div class="collection-item">
+      <a href="{{ .Permalink }}">
+        <h2>{{ .Title }}</h2>
+        <p>{{ .Summary }}</p>
+      </a>
+    </div>
+  {{ end }}
+</div>
+
+<h1>最新更新</h1>
+<div class="latest-updates">
+  {{ range first 5 (where .Site.RegularPages "Section" "novel-collections").ByDate.Reverse }}
+    <div class="update-item">
+      <a href="{{ .Permalink }}">
+        <h3>{{ .Title }}</h3>
+        <p class="meta">
+          {{ .CurrentSection.Parent.Title }} / {{ .CurrentSection.Title }} · {{ .Date.Format "2006-01-02" }}
+        </p>
+      </a>
+    </div>
+  {{ end }}
+</div>
+
+<h1>关于本站</h1>
+<div class="about-site">
+  <p>欢迎来到我的私人小说空间，这里收录了我的原创小说作品。</p>
+  <p>您可以通过上方导航栏浏览不同的小说集，每个小说集包含多个分卷，每个分卷包含多个章节。</p>
+</div>
+{{ end }}

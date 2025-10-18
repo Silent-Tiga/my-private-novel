@@ -1,0 +1,15 @@
+{{ define "main" }}
+<div class="novel-collections">
+  <h1>{{ .Title }}</h1>
+  <div class="collection-list">
+    {{ range .Pages }}
+      <div class="collection-item">
+        <a href="{{ .Permalink }}">
+          <h2>{{ .Title }}</h2>
+          <p>{{ .Summary }}</p>
+        </a>
+      </div>
+    {{ end }}
+  </div>
+</div>
+{{ end }}

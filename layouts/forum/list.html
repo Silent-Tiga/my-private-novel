@@ -1,0 +1,388 @@
+{{ define "main" }}
+<div class="forum-page" style="max-width: 900px; margin: 0 auto;">
+  <h1 style="margin-bottom: 1rem;">讨论区</h1>
+  <p style="color: var(--light-text); margin-bottom: 1.5rem;">发布与浏览讨论贴</p>
+
+  <!-- 发布讨论贴表单（仅有写权限用户显示） -->
+  <div id="thread-form-container" style="display:none; background: var(--card-bg-color); padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem;">
+    <h3 style="margin-top: 0;">发布新讨论贴</h3>
+    <form id="thread-form">
+      <div style="margin-bottom: 0.75rem;">
+        <label for="thread-title" style="display:block; margin-bottom: 0.25rem;">标题</label>
+        <input id="thread-title" type="text" style="width:100%; padding: 10px; border:1px solid var(--border-color); border-radius:4px;" required />
+      </div>
+      <div style="margin-bottom: 0.75rem;">
+        <label for="thread-content" style="display:block; margin-bottom: 0.25rem;">内容（支持Markdown）</label>
+        <textarea id="thread-content" rows="6" style="width:100%; padding: 10px; border:1px solid var(--border-color); border-radius:4px;" required></textarea>
+      </div>
+      <div style="margin-bottom: 0.75rem;">
+        <label for="thread-tags" style="display:block; margin-bottom: 0.25rem;">标签（逗号分隔）</label>
+        <input id="thread-tags" type="text" placeholder="如：闲聊, 求助" style="width:100%; padding: 10px; border:1px solid var(--border-color); border-radius:4px;" />
+      </div>
+      <div style="display:flex; gap: 10px;">
+        <button type="submit" style="padding: 10px 16px; background-color: var(--primary-color); color:white; border:none; border-radius:4px; cursor:pointer;">发布</button>
+        <div id="thread-submit-status" style="align-self:center; color: var(--light-text);"></div>
+      </div>
+    </form>
+  </div>
+
+  <!-- 权限提示（未登录或无写权限） -->
+  <div id="thread-permission-tip" style="display:none; background:#fffbe6; color:#8d6a00; border:1px solid #ffe58f; padding: 12px; border-radius:6px; margin-bottom:1.5rem;">
+    发布讨论贴需登录且具备写权限。请登录为 <code>editor</code> 或 <code>admin</code>。
+  </div>
+
+  <!-- 讨论贴列表 -->
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
+    <h3 style="margin:0;">最新讨论</h3>
+    <div>
+      <input id="filter-tag" type="text" placeholder="按标签过滤" style="padding:8px; border:1px solid var(--border-color); border-radius:4px;" />
+      <button id="apply-filter" style="padding:8px 12px; margin-left:6px; border:1px solid var(--border-color); border-radius:4px; cursor:pointer;">过滤</button>
+    </div>
+  </div>
+  <div id="threads-container"></div>
+</div>
+
+<script>
+  const THREADS_KEY = 'forum_threads';
+
+  function hasWritePermission() {
+    try {
+      const user = getCurrentUser();
+      return !!(user && (typeof hasPermission === 'function') && hasPermission(user, 'write'));
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function getCurrentUserSafe() {
+    try { return getCurrentUser && getCurrentUser(); } catch(e) { return null; }
+  }
+
+  function loadThreads() {
+    try {
+      const raw = localStorage.getItem(THREADS_KEY);
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr : [];
+    } catch(e) {
+      return [];
+    }
+  }
+
+  function saveThreads(threads) {
+    try { localStorage.setItem(THREADS_KEY, JSON.stringify(threads)); } catch(e) {}
+  }
+
+  function renderThreads() {
+    const container = document.getElementById('threads-container');
+    container.innerHTML = '';
+
+    const filter = (document.getElementById('filter-tag').value || '').trim().toLowerCase();
+
+    let threads = loadThreads();
+    threads.sort((a,b) => new Date(b.date) - new Date(a.date));
+
+    if (filter) {
+      threads = threads.filter(t => (t.tags || []).some(tag => tag.toLowerCase().includes(filter)));
+    }
+
+    if (!threads.length) {
+      container.innerHTML = '<div style="color:var(--light-text);">目前还没有讨论贴，快来发布第一条吧！</div>';
+      return;
+    }
+
+    threads.forEach(t => container.appendChild(threadItem(t)));
+  }
+
+  function threadItem(thread) {
+    const div = document.createElement('div');
+    div.className = 'thread-item';
+    div.style.border = '1px solid var(--border-color)';
+    div.style.borderRadius = '8px';
+    div.style.padding = '12px';
+    div.style.marginBottom = '12px';
+
+    const tagsHtml = (thread.tags || []).map(tag => `<span style="background:#eef3ff; color:#3a7bd5; padding:2px 6px; border-radius:4px; margin-right:4px; font-size:12px;">${escapeHtml(tag)}</span>`).join('');
+
+    div.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <h4 style="margin:0;">${escapeHtml(thread.title)}</h4>
+        <div style="display:flex; gap:8px;">
+          ${canEdit(thread) ? `<button class="edit-thread" data-id="${thread.id}" style="padding:6px 10px; background:#3a7bd5; color:white; border:none; border-radius:4px; cursor:pointer;">编辑</button>` : ''}
+          ${canDelete() ? `<button class="delete-thread" data-id="${thread.id}" style="padding:6px 10px; background:#e74c3c; color:white; border:none; border-radius:4px; cursor:pointer;">删除</button>` : ''}
+        </div>
+      </div>
+      <div style="color:var(--light-text); font-size: 0.9rem; margin:4px 0 8px;">由 ${escapeHtml(thread.author)} 发布 · ${formatDate(thread.date)}</div>
+      <div class="thread-content" style="margin: 8px 0;">${formatContent(thread.content)}</div>
+      <div>${tagsHtml}</div>
+      <div style="display:flex; gap:10px; margin-top:8px;">
+        <button class="like-thread" data-id="${thread.id}" style="padding:6px 10px; border:1px solid var(--border-color); border-radius:4px; cursor:pointer;">赞 ${thread.likes || 0}</button>
+        <button class="toggle-reply" data-id="${thread.id}" style="padding:6px 10px; border:1px solid var(--border-color); border-radius:4px; cursor:pointer;">回复</button>
+      </div>
+      <div id="edit-form-${thread.id}" style="display:none; margin-top:8px;">
+        <form class="edit-form" data-id="${thread.id}">
+          <div style="margin-bottom:6px;">
+            <label style="display:block; margin-bottom:4px;">标题</label>
+            <input class="edit-title" type="text" value="${escapeHtml(thread.title)}" style="width:100%; padding:8px; border:1px solid var(--border-color); border-radius:4px;" />
+          </div>
+          <div style="margin-bottom:6px;">
+            <label style="display:block; margin-bottom:4px;">内容</label>
+            <textarea class="edit-content" rows="4" style="width:100%; padding:8px; border:1px solid var(--border-color); border-radius:4px;">${escapeHtml(thread.content)}</textarea>
+          </div>
+          <div style="margin-bottom:6px;">
+            <label style="display:block; margin-bottom:4px;">标签（逗号分隔）</label>
+            <input class="edit-tags" type="text" value="${(thread.tags||[]).join(', ')}" style="width:100%; padding:8px; border:1px solid var(--border-color); border-radius:4px;" />
+          </div>
+          <div style="display:flex; gap:10px;">
+            <button type="submit" style="padding:6px 10px; background:#3a7bd5; color:white; border:none; border-radius:4px; cursor:pointer;">保存修改</button>
+            <button type="button" class="cancel-edit" data-id="${thread.id}" style="padding:6px 10px; border:1px solid var(--border-color); border-radius:4px; cursor:pointer;">取消</button>
+          </div>
+        </form>
+      </div>
+      <div id="reply-form-${thread.id}" style="display:none; margin-top:8px;">
+        <form class="reply-form" data-id="${thread.id}">
+          <textarea class="reply-content" rows="3" style="width:100%; padding:8px; border:1px solid var(--border-color); border-radius:4px;" placeholder="回复 ${escapeHtml(thread.author)}..."></textarea>
+          <div style="display:flex; gap:10px; margin-top:6px;">
+            <button type="submit" style="padding:6px 10px; background:var(--primary-color); color:white; border:none; border-radius:4px; cursor:pointer;">提交回复</button>
+            <button type="button" class="cancel-reply" data-id="${thread.id}" style="padding:6px 10px; border:1px solid var(--border-color); border-radius:4px; cursor:pointer;">取消</button>
+          </div>
+        </form>
+      </div>
+      <div class="thread-replies" id="replies-${thread.id}" style="margin-top:10px;">${renderReplies(thread.replies || [])}</div>
+    `;
+
+    // 事件
+    const editBtn = div.querySelector('.edit-thread');
+    editBtn && editBtn.addEventListener('click', () => toggleEdit(thread.id));
+
+    const cancelEditBtn = div.querySelector('.cancel-edit');
+    cancelEditBtn && cancelEditBtn.addEventListener('click', () => toggleEdit(thread.id));
+
+    const editForm = div.querySelector('.edit-form');
+    editForm && editForm.addEventListener('submit', (e) => submitEdit(e, thread.id));
+
+    const likeBtn = div.querySelector('.like-thread');
+    likeBtn && likeBtn.addEventListener('click', () => likeThread(thread.id));
+
+    const toggleBtn = div.querySelector('.toggle-reply');
+    toggleBtn && toggleBtn.addEventListener('click', () => toggleReply(thread.id));
+
+    const cancelBtn = div.querySelector('.cancel-reply');
+    cancelBtn && cancelBtn.addEventListener('click', () => toggleReply(thread.id));
+
+    const replyForm = div.querySelector('.reply-form');
+    replyForm && replyForm.addEventListener('submit', (e) => submitReply(e, thread.id));
+
+    const delBtn = div.querySelector('.delete-thread');
+    delBtn && delBtn.addEventListener('click', () => deleteThread(thread.id));
+
+    return div;
+  }
+
+  function renderReplies(replies) {
+    if (!replies || !replies.length) return '';
+    const sorted = [...replies].sort((a,b) => new Date(b.date) - new Date(a.date));
+    return `<div>${sorted.map(r => replyItem(r)).join('')}</div>`;
+  }
+
+  function replyItem(r) {
+    return `
+      <div style="border-top:1px solid var(--border-color); padding-top:8px; margin-top:8px;">
+        <div style="color:var(--light-text); font-size:0.9rem;">${escapeHtml(r.author)} · ${formatDate(r.date)}</div>
+        <div>${formatContent(r.content)}</div>
+      </div>
+    `;
+  }
+
+  function toggleReply(id) {
+    const box = document.getElementById(`reply-form-${id}`);
+    if (!box) return;
+    box.style.display = box.style.display === 'none' ? 'block' : 'none';
+  }
+
+  function submitReply(e, id) {
+    e.preventDefault();
+    const user = getCurrentUserSafe();
+    if (!user) { return alert('请先登录后再回复'); }
+
+    const contentEl = e.target.querySelector('.reply-content');
+    const content = (contentEl.value || '').trim();
+    if (!content) return alert('请输入回复内容');
+
+    const threads = loadThreads();
+    const idx = threads.findIndex(t => t.id === id);
+    if (idx === -1) return;
+
+    const reply = {
+      id: genId(),
+      author: user.sub || '匿名',
+      content,
+      date: new Date().toISOString()
+    };
+
+    threads[idx].replies = threads[idx].replies || [];
+    threads[idx].replies.push(reply);
+    saveThreads(threads);
+    renderThreads();
+  }
+
+  function likeThread(id) {
+    const threads = loadThreads();
+    const idx = threads.findIndex(t => t.id === id);
+    if (idx === -1) return;
+    threads[idx].likes = (threads[idx].likes || 0) + 1;
+    saveThreads(threads);
+    renderThreads();
+  }
+
+  function deleteThread(id) {
+    if (!canDelete()) return alert('您没有删除权限');
+    if (!confirm('确定删除该讨论贴？')) return;
+    const threads = loadThreads().filter(t => t.id !== id);
+    saveThreads(threads);
+    renderThreads();
+  }
+
+  function canDelete() {
+    const user = getCurrentUserSafe();
+    return !!(user && user.role === 'admin');
+  }
+
+  function canEdit(thread) {
+    const user = getCurrentUserSafe();
+    if (!user) return false;
+    if (user.role === 'admin') return true;
+    return (user.sub || '').toLowerCase() === (thread.author || '').toLowerCase();
+  }
+
+  function toggleEdit(id) {
+    const box = document.getElementById(`edit-form-${id}`);
+    if (!box) return;
+    box.style.display = box.style.display === 'none' ? 'block' : 'none';
+  }
+
+  function submitEdit(e, id) {
+    e.preventDefault();
+    const user = getCurrentUserSafe();
+    if (!user) return alert('请先登录');
+
+    const threads = loadThreads();
+    const idx = threads.findIndex(t => t.id === id);
+    if (idx === -1) return;
+
+    if (!canEdit(threads[idx])) return alert('您没有编辑权限');
+
+    const title = e.target.querySelector('.edit-title').value.trim();
+    const content = e.target.querySelector('.edit-content').value.trim();
+    const tagsVal = e.target.querySelector('.edit-tags').value.trim();
+    const tags = tagsVal ? tagsVal.split(',').map(t => t.trim()).filter(Boolean) : [];
+
+    if (!title || !content) return alert('请填写标题与内容');
+
+    threads[idx].title = title;
+    threads[idx].content = content;
+    threads[idx].tags = tags;
+    threads[idx].editedAt = new Date().toISOString();
+    saveThreads(threads);
+    renderThreads();
+  }
+
+  function genId() { return Date.now().toString(36) + Math.random().toString(36).slice(2); }
+
+  function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text || '';
+    return div.innerHTML;
+  }
+
+  // 扩展：支持内容中的 Cloudflare R2 媒体引用（cf://key.ext）
+  function formatContent(text) {
+    const escapeHtmlLocal = (str) => (str || '').replace(/[&<>"']/g, function(m) {
+      return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'})[m];
+    });
+    const raw = text || '';
+    const parts = [];
+    let lastIndex = 0;
+    const regex = /cf:\/\/([^\s<]+)/g;
+    let match;
+    while ((match = regex.exec(raw))) {
+      const before = raw.slice(lastIndex, match.index);
+      parts.push(escapeHtmlLocal(before));
+      const key = match[1];
+      const url = (typeof cfMediaUrl === 'function') ? cfMediaUrl(key) : key;
+      const ext = (key.split('.').pop()||'').toLowerCase();
+      if (/(png|jpe?g|gif|webp|svg)$/.test(ext)) {
+        parts.push(`<img src="${url}" style="max-width:100%; border-radius:6px; margin:8px 0;" />`);
+      } else if (/(mp4|webm|ogg)$/.test(ext)) {
+        parts.push(`<video src="${url}" controls style="max-width:100%; border-radius:6px; margin:8px 0;"></video>`);
+      } else {
+        parts.push(`<a href="${url}" target="_blank" rel="noopener" style="display:inline-block; margin:6px 0;">${escapeHtmlLocal(key)}</a>`);
+      }
+      lastIndex = regex.lastIndex;
+    }
+    parts.push(escapeHtmlLocal(raw.slice(lastIndex)));
+    return parts.join('').replace(/\n/g, '<br>');
+}
+   function formatDate(iso) {
+      const d = new Date(iso);
+      return d.toLocaleString('zh-CN');
+    }
+
+  function initForm() {
+    const formContainer = document.getElementById('thread-form-container');
+    const tip = document.getElementById('thread-permission-tip');
+
+    if (hasWritePermission()) {
+      formContainer.style.display = 'block';
+      tip.style.display = 'none';
+
+      const form = document.getElementById('thread-form');
+      const status = document.getElementById('thread-submit-status');
+      form.addEventListener('submit', function(e) {
+        e.preventDefault();
+        const user = getCurrentUserSafe();
+        if (!user) return alert('请先登录');
+
+        const title = document.getElementById('thread-title').value.trim();
+        const content = document.getElementById('thread-content').value.trim();
+        const tags = document.getElementById('thread-tags').value.split(',').map(t => t.trim()).filter(Boolean);
+        if (!title || !content) { status.textContent = '请填写标题和内容'; return; }
+
+        status.textContent = '发布中...';
+        setTimeout(() => {
+          const threads = loadThreads();
+          threads.push({
+            id: genId(),
+            title,
+            content,
+            tags,
+            author: user.sub || '匿名',
+            date: new Date().toISOString(),
+            likes: 0,
+            replies: []
+          });
+          saveThreads(threads);
+          form.reset();
+          status.textContent = '发布成功！';
+          renderThreads();
+          setTimeout(() => status.textContent = '', 1500);
+        }, 600);
+      });
+    } else {
+      formContainer.style.display = 'none';
+      tip.style.display = 'block';
+    }
+
+    document.getElementById('apply-filter').addEventListener('click', renderThreads);
+  }
+
+  document.addEventListener('DOMContentLoaded', function() {
+    initForm();
+    renderThreads();
+  });
+</script>
+<!-- 在发布表单与编辑表单附近增加提示 -->
+<div style="margin-top:8px; color:#666; font-size:0.9rem;">
+  提示：可在内容中插入私有媒体，写法如 <code>cf://路径/文件名.jpg</code> 或 <code>cf://视频/key.mp4</code>，系统会生成私有访问链接。
+</div>
+</div>
+{{ end }}

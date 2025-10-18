@@ -1,0 +1,944 @@
+<!-- 评论系统 -->
+<div class="comments-section">
+    <h3 class="comments-title">评论区</h3>
+    
+    <!-- 评论表单 -->
+    <div class="comment-form-container">
+        <form id="comment-form" class="comment-form">
+            <div class="comment-form-header">
+                <h4>发表评论</h4>
+            </div>
+            
+            <div class="comment-form-fields">
+                <div class="form-group">
+                    <label for="comment-author">昵称</label>
+                    <input type="text" id="comment-author" name="author" placeholder="请输入您的昵称" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="comment-content">评论内容</label>
+                    <textarea id="comment-content" name="content" rows="4" placeholder="请输入您的评论..." required></textarea>
+                </div>
+                
+                <div class="form-group">
+                    <label for="comment-email">电子邮箱（选填，用于接收回复通知）</label>
+                    <input type="email" id="comment-email" name="email" placeholder="your@email.com">
+                </div>
+            </div>
+            
+            <div class="comment-form-actions">
+                <button type="submit" class="submit-comment-btn">提交评论</button>
+                <div id="comment-submit-status" class="comment-submit-status"></div>
+            </div>
+        </form>
+    </div>
+    
+    <!-- 评论列表 -->
+    <div id="comments-container" class="comments-container">
+        <!-- 评论将在这里动态显示 -->
+        <div id="no-comments" class="no-comments">
+            <p>暂无评论，快来发表第一条评论吧！</p>
+        </div>
+    </div>
+    
+    <!-- 评论分页 -->
+    <div id="comments-pagination" class="comments-pagination">
+        <!-- 分页控件将在这里动态显示 -->
+    </div>
+</div>
+
+<script>
+    // 评论系统配置
+    const commentConfig = {
+        pageSize: 10,
+        currentPage: 1,
+        postId: '{{ .RelPermalink | md5 }}', // 使用文章永久链接的MD5作为唯一标识
+        isSubmitting: false
+    };
+
+    // DOM 元素
+    const commentForm = document.getElementById('comment-form');
+    const commentAuthor = document.getElementById('comment-author');
+    const commentContent = document.getElementById('comment-content');
+    const commentEmail = document.getElementById('comment-email');
+    const commentSubmitStatus = document.getElementById('comment-submit-status');
+    const commentsContainer = document.getElementById('comments-container');
+    const noComments = document.getElementById('no-comments');
+    const commentsPagination = document.getElementById('comments-pagination');
+
+    // 初始化评论系统
+    function initComments() {
+        // 加载评论
+        loadComments();
+        
+        // 绑定评论提交事件
+        commentForm.addEventListener('submit', handleCommentSubmit);
+        
+        // 检查用户登录状态
+        checkUserLogin();
+    }
+
+    // 加载评论
+    function loadComments() {
+        // 显示加载状态
+        commentsContainer.innerHTML = '<div class="comment-loading">加载评论中...</div>';
+        noComments.style.display = 'none';
+        commentsPagination.innerHTML = '';
+        
+        // 模拟加载延迟
+        setTimeout(() => {
+            // 从本地存储获取评论
+            const comments = getCommentsFromStorage(commentConfig.postId);
+            
+            // 显示评论
+            displayComments(comments);
+        }, 500);
+    }
+
+    // 显示评论
+    function displayComments(comments) {
+        // 清空评论容器
+        commentsContainer.innerHTML = '';
+        
+        // 如果没有评论，显示无评论状态
+        if (!comments || comments.length === 0) {
+            noComments.style.display = 'block';
+            return;
+        }
+        
+        // 按时间排序（最新的在前）
+        comments.sort((a, b) => new Date(b.date) - new Date(a.date));
+        
+        // 计算分页
+        const totalPages = Math.ceil(comments.length / commentConfig.pageSize);
+        const startIndex = (commentConfig.currentPage - 1) * commentConfig.pageSize;
+        const endIndex = Math.min(startIndex + commentConfig.pageSize, comments.length);
+        const currentComments = comments.slice(startIndex, endIndex);
+        
+        // 显示当前页的评论
+        currentComments.forEach(comment => {
+            const commentElement = createCommentElement(comment);
+            commentsContainer.appendChild(commentElement);
+        });
+        
+        // 显示分页控件
+        displayPagination(totalPages);
+        
+        // 隐藏无评论状态
+        noComments.style.display = 'none';
+    }
+
+    // 创建评论元素
+    function createCommentElement(comment) {
+        const commentElement = document.createElement('div');
+        commentElement.className = 'comment-item';
+        commentElement.dataset.id = comment.id;
+        
+        // 评论元素HTML结构
+        const html = `
+            <div class="comment-header">
+                <div class="comment-author-avatar">
+                    ${getAvatarForAuthor(comment.author)}
+                </div>
+                <div class="comment-author-info">
+                    <div class="comment-author-name">${comment.author}</div>
+                    <div class="comment-date">${formatCommentDate(comment.date)}</div>
+                </div>
+                ${isAdmin() ? `<button class="delete-comment-btn" data-id="${comment.id}">删除</button>` : ''}
+            </div>
+            <div class="comment-content">${formatCommentContent(comment.content)}</div>
+            <div class="comment-actions">
+                <button class="reply-comment-btn" data-id="${comment.id}">回复</button>
+                <button class="like-comment-btn" data-id="${comment.id}">${comment.likes || 0} 赞</button>
+            </div>
+            
+            <!-- 回复表单 -->
+            <div class="reply-form-container" id="reply-form-${comment.id}" style="display: none;">
+                <form class="reply-form" data-id="${comment.id}">
+                    <textarea class="reply-content" rows="2" placeholder="回复 ${comment.author}..." required></textarea>
+                    <div class="reply-form-actions">
+                        <button type="submit" class="submit-reply-btn">提交回复</button>
+                        <button type="button" class="cancel-reply-btn" data-id="${comment.id}">取消</button>
+                    </div>
+                </form>
+            </div>
+            
+            <!-- 回复列表 -->
+            <div class="replies-container" id="replies-${comment.id}">
+                ${renderReplies(comment.replies || [])}
+            </div>
+        `;
+        
+        commentElement.innerHTML = html;
+        
+        // 绑定回复按钮事件
+        const replyBtn = commentElement.querySelector(`.reply-comment-btn[data-id="${comment.id}"]`);
+        if (replyBtn) {
+            replyBtn.addEventListener('click', toggleReplyForm);
+        }
+        
+        // 绑定取消回复按钮事件
+        const cancelReplyBtn = commentElement.querySelector(`.cancel-reply-btn[data-id="${comment.id}"]`);
+        if (cancelReplyBtn) {
+            cancelReplyBtn.addEventListener('click', toggleReplyForm);
+        }
+        
+        // 绑定回复表单提交事件
+        const replyForm = commentElement.querySelector(`.reply-form[data-id="${comment.id}"]`);
+        if (replyForm) {
+            replyForm.addEventListener('submit', handleReplySubmit);
+        }
+        
+        // 绑定点赞按钮事件
+        const likeBtn = commentElement.querySelector(`.like-comment-btn[data-id="${comment.id}"]`);
+        if (likeBtn) {
+            likeBtn.addEventListener('click', handleLikeComment);
+        }
+        
+        // 绑定删除按钮事件（管理员）
+        const deleteBtn = commentElement.querySelector(`.delete-comment-btn[data-id="${comment.id}"]`);
+        if (deleteBtn) {
+            deleteBtn.addEventListener('click', handleDeleteComment);
+        }
+        
+        return commentElement;
+    }
+
+    // 渲染回复
+    function renderReplies(replies) {
+        if (!replies || replies.length === 0) {
+            return '';
+        }
+        
+        // 按时间排序（最新的在前）
+        replies.sort((a, b) => new Date(b.date) - new Date(a.date));
+        
+        let html = '<div class="replies-list">';
+        
+        replies.forEach(reply => {
+            html += `
+                <div class="reply-item" data-id="${reply.id}">
+                    <div class="reply-header">
+                        <div class="reply-author-name">${reply.author}</div>
+                        <div class="reply-date">${formatCommentDate(reply.date)}</div>
+                        ${isAdmin() ? `<button class="delete-reply-btn" data-id="${reply.id}">删除</button>` : ''}
+                    </div>
+                    <div class="reply-content">回复 ${reply.to}: ${formatCommentContent(reply.content)}</div>
+                </div>
+            `;
+        });
+        
+        html += '</div>';
+        
+        return html;
+    }
+
+    // 处理评论提交
+    function handleCommentSubmit(event) {
+        event.preventDefault();
+        
+        // 检查是否正在提交
+        if (commentConfig.isSubmitting) {
+            return;
+        }
+        
+        // 获取表单数据
+        const author = commentAuthor.value.trim();
+        const content = commentContent.value.trim();
+        const email = commentEmail.value.trim();
+        
+        // 表单验证
+        if (!author || !content) {
+            showSubmitStatus('请填写昵称和评论内容', 'error');
+            return;
+        }
+        
+        // 设置提交状态
+        commentConfig.isSubmitting = true;
+        showSubmitStatus('提交中...', 'loading');
+        
+        // 模拟提交延迟
+        setTimeout(() => {
+            // 创建评论对象
+            const comment = {
+                id: generateCommentId(),
+                author: author,
+                email: email,
+                content: content,
+                date: new Date().toISOString(),
+                likes: 0,
+                replies: []
+            };
+            
+            // 保存评论
+            saveComment(commentConfig.postId, comment);
+            
+            // 重置表单
+            commentForm.reset();
+            
+            // 重新加载评论
+            loadComments();
+            
+            // 显示成功状态
+            showSubmitStatus('评论提交成功！', 'success');
+            
+            // 重置提交状态
+            setTimeout(() => {
+                commentConfig.isSubmitting = false;
+                commentSubmitStatus.innerHTML = '';
+            }, 2000);
+        }, 1000);
+    }
+
+    // 处理回复提交
+    function handleReplySubmit(event) {
+        event.preventDefault();
+        
+        const replyForm = event.currentTarget;
+        const commentId = replyForm.dataset.id;
+        const replyContent = replyForm.querySelector('.reply-content').value.trim();
+        const authorName = commentAuthor.value.trim() || '匿名用户';
+        
+        // 验证回复内容
+        if (!replyContent) {
+            alert('请输入回复内容');
+            return;
+        }
+        
+        // 获取目标评论的作者
+        const commentElement = document.querySelector(`.comment-item[data-id="${commentId}"]`);
+        const targetAuthor = commentElement.querySelector('.comment-author-name').textContent;
+        
+        // 创建回复对象
+        const reply = {
+            id: generateCommentId(),
+            author: authorName,
+            to: targetAuthor,
+            content: replyContent,
+            date: new Date().toISOString()
+        };
+        
+        // 保存回复
+        saveReply(commentConfig.postId, commentId, reply);
+        
+        // 隐藏回复表单
+        const replyFormContainer = document.getElementById(`reply-form-${commentId}`);
+        replyFormContainer.style.display = 'none';
+        
+        // 重置回复表单
+        replyForm.reset();
+        
+        // 重新加载评论
+        loadComments();
+    }
+
+    // 切换回复表单显示
+    function toggleReplyForm(event) {
+        const commentId = event.currentTarget.dataset.id;
+        const replyFormContainer = document.getElementById(`reply-form-${commentId}`);
+        
+        // 切换显示状态
+        if (replyFormContainer.style.display === 'none') {
+            replyFormContainer.style.display = 'block';
+        } else {
+            replyFormContainer.style.display = 'none';
+        }
+    }
+
+    // 处理评论点赞
+    function handleLikeComment(event) {
+        const commentId = event.currentTarget.dataset.id;
+        
+        // 更新点赞数
+        toggleCommentLike(commentConfig.postId, commentId);
+        
+        // 重新加载评论
+        loadComments();
+    }
+
+    // 处理删除评论
+    function handleDeleteComment(event) {
+        if (!confirm('确定要删除这条评论吗？')) {
+            return;
+        }
+        
+        const commentId = event.currentTarget.dataset.id;
+        
+        // 删除评论
+        deleteComment(commentConfig.postId, commentId);
+        
+        // 重新加载评论
+        loadComments();
+    }
+
+    // 显示分页控件
+    function displayPagination(totalPages) {
+        if (totalPages <= 1) {
+            commentsPagination.innerHTML = '';
+            return;
+        }
+        
+        let html = '<div class="pagination-controls">';
+        
+        // 上一页
+        if (commentConfig.currentPage > 1) {
+            html += `<button class="pagination-btn" data-page="${commentConfig.currentPage - 1}">上一页</button>`;
+        }
+        
+        // 页码
+        for (let i = 1; i <= totalPages; i++) {
+            if (i === commentConfig.currentPage) {
+                html += `<button class="pagination-btn active" data-page="${i}">${i}</button>`;
+            } else {
+                html += `<button class="pagination-btn" data-page="${i}">${i}</button>`;
+            }
+        }
+        
+        // 下一页
+        if (commentConfig.currentPage < totalPages) {
+            html += `<button class="pagination-btn" data-page="${commentConfig.currentPage + 1}">下一页</button>`;
+        }
+        
+        html += '</div>';
+        
+        commentsPagination.innerHTML = html;
+        
+        // 绑定分页按钮事件
+        const paginationBtns = commentsPagination.querySelectorAll('.pagination-btn');
+        paginationBtns.forEach(btn => {
+            btn.addEventListener('click', handlePaginationClick);
+        });
+    }
+
+    // 处理分页点击
+    function handlePaginationClick(event) {
+        const page = parseInt(event.currentTarget.dataset.page);
+        
+        if (page !== commentConfig.currentPage) {
+            commentConfig.currentPage = page;
+            loadComments();
+        }
+    }
+
+    // 显示提交状态
+    function showSubmitStatus(message, type) {
+        commentSubmitStatus.className = `comment-submit-status ${type}`;
+        commentSubmitStatus.textContent = message;
+    }
+
+    // 从本地存储获取评论
+    function getCommentsFromStorage(postId) {
+        try {
+            const storageKey = `comments_${postId}`;
+            const comments = localStorage.getItem(storageKey);
+            return comments ? JSON.parse(comments) : [];
+        } catch (error) {
+            console.error('获取评论失败:', error);
+            return [];
+        }
+    }
+
+    // 保存评论
+    function saveComment(postId, comment) {
+        try {
+            const comments = getCommentsFromStorage(postId);
+            comments.push(comment);
+            localStorage.setItem(`comments_${postId}`, JSON.stringify(comments));
+        } catch (error) {
+            console.error('保存评论失败:', error);
+        }
+    }
+
+    // 保存回复
+    function saveReply(postId, commentId, reply) {
+        try {
+            const comments = getCommentsFromStorage(postId);
+            const commentIndex = comments.findIndex(c => c.id === commentId);
+            
+            if (commentIndex !== -1) {
+                if (!comments[commentIndex].replies) {
+                    comments[commentIndex].replies = [];
+                }
+                comments[commentIndex].replies.push(reply);
+                localStorage.setItem(`comments_${postId}`, JSON.stringify(comments));
+            }
+        } catch (error) {
+            console.error('保存回复失败:', error);
+        }
+    }
+
+    // 切换评论点赞
+    function toggleCommentLike(postId, commentId) {
+        try {
+            const comments = getCommentsFromStorage(postId);
+            const commentIndex = comments.findIndex(c => c.id === commentId);
+            
+            if (commentIndex !== -1) {
+                comments[commentIndex].likes = (comments[commentIndex].likes || 0) + 1;
+                localStorage.setItem(`comments_${postId}`, JSON.stringify(comments));
+            }
+        } catch (error) {
+            console.error('点赞失败:', error);
+        }
+    }
+
+    // 删除评论
+    function deleteComment(postId, commentId) {
+        try {
+            const comments = getCommentsFromStorage(postId);
+            const filteredComments = comments.filter(c => c.id !== commentId);
+            localStorage.setItem(`comments_${postId}`, JSON.stringify(filteredComments));
+        } catch (error) {
+            console.error('删除评论失败:', error);
+        }
+    }
+
+    // 生成评论ID
+    function generateCommentId() {
+        return Date.now().toString(36) + Math.random().toString(36).substr(2);
+    }
+
+    // 格式化评论日期
+    function formatCommentDate(dateString) {
+        const date = new Date(dateString);
+        const now = new Date();
+        const diffMs = now - date;
+        const diffMins = Math.floor(diffMs / 60000);
+        const diffHours = Math.floor(diffMs / 3600000);
+        const diffDays = Math.floor(diffMs / 86400000);
+        
+        if (diffMins < 1) {
+            return '刚刚';
+        } else if (diffMins < 60) {
+            return `${diffMins}分钟前`;
+        } else if (diffHours < 24) {
+            return `${diffHours}小时前`;
+        } else if (diffDays < 30) {
+            return `${diffDays}天前`;
+        } else {
+            return date.toLocaleDateString('zh-CN');
+        }
+    }
+
+    // 格式化评论内容
+    function formatCommentContent(content) {
+        // 简单的HTML转义
+        const escapeHtml = text => {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        };
+        
+        // 转义HTML
+        let formatted = escapeHtml(content);
+        
+        // 将换行符转换为<br>
+        formatted = formatted.replace(/\n/g, '<br>');
+        
+        return formatted;
+    }
+
+    // 获取作者头像
+    function getAvatarForAuthor(author) {
+        // 简单的头像生成，使用作者名称的第一个字符
+        const firstChar = author.charAt(0).toUpperCase();
+        const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FECA57', '#FF9FF3', '#54A0FF', '#5F27CD'];
+        const colorIndex = author.charCodeAt(0) % colors.length;
+        const bgColor = colors[colorIndex];
+        
+        return `<div class="avatar" style="background-color: ${bgColor};">${firstChar}</div>`;
+    }
+
+    // 检查用户登录状态
+    function checkUserLogin() {
+        // 从访问控制系统获取当前用户信息
+        const currentUser = getCurrentUser();
+        
+        if (currentUser && currentUser.name) {
+            commentAuthor.value = currentUser.name;
+            commentAuthor.disabled = true;
+        }
+    }
+
+    // 检查是否为管理员
+    function isAdmin() {
+        const currentUser = getCurrentUser();
+        return currentUser && currentUser.role === 'admin';
+    }
+
+    // 从访问控制系统获取当前用户信息
+    function getCurrentUser() {
+        try {
+            const userData = localStorage.getItem('currentUser');
+            return userData ? JSON.parse(userData) : null;
+        } catch (error) {
+            console.error('获取用户信息失败:', error);
+            return null;
+        }
+    }
+
+    // 页面加载完成后初始化评论系统
+    document.addEventListener('DOMContentLoaded', initComments);
+</script>
+
+<style>
+    .comments-section {
+        background-color: var(--card-bg-color);
+        border-radius: 8px;
+        padding: 2rem;
+        margin-top: 2rem;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    }
+    
+    .comments-title {
+        color: var(--text-color);
+        font-size: 1.5rem;
+        margin-bottom: 1.5rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 1px solid var(--border-color);
+    }
+    
+    .comment-form-container {
+        margin-bottom: 2rem;
+    }
+    
+    .comment-form-header h4 {
+        color: var(--text-color);
+        margin-bottom: 1rem;
+        font-size: 1.1rem;
+    }
+    
+    .comment-form-fields {
+        space-y: 1rem;
+    }
+    
+    .form-group {
+        margin-bottom: 1rem;
+    }
+    
+    .form-group label {
+        display: block;
+        color: var(--secondary-text-color);
+        font-size: 0.875rem;
+        margin-bottom: 0.5rem;
+    }
+    
+    .form-group input,
+    .form-group textarea {
+        width: 100%;
+        padding: 0.75rem;
+        border: 1px solid var(--border-color);
+        border-radius: 4px;
+        background-color: var(--input-bg-color);
+        color: var(--text-color);
+        font-size: 0.875rem;
+        resize: vertical;
+    }
+    
+    .form-group input:focus,
+    .form-group textarea:focus {
+        outline: none;
+        border-color: var(--primary-color);
+    }
+    
+    .comment-form-actions {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    
+    .submit-comment-btn {
+        padding: 0.75rem 1.5rem;
+        background-color: var(--primary-color);
+        color: white;
+        border: none;
+        border-radius: 4px;
+        font-size: 0.875rem;
+        cursor: pointer;
+        transition: background-color 0.3s;
+    }
+    
+    .submit-comment-btn:hover {
+        background-color: var(--primary-color-dark);
+    }
+    
+    .comment-submit-status {
+        font-size: 0.875rem;
+    }
+    
+    .comment-submit-status.loading {
+        color: var(--secondary-text-color);
+    }
+    
+    .comment-submit-status.success {
+        color: var(--success-color);
+    }
+    
+    .comment-submit-status.error {
+        color: var(--error-color);
+    }
+    
+    .comments-container {
+        space-y: 1.5rem;
+    }
+    
+    .no-comments {
+        text-align: center;
+        padding: 2rem;
+        color: var(--secondary-text-color);
+    }
+    
+    .comment-loading {
+        text-align: center;
+        padding: 2rem;
+        color: var(--secondary-text-color);
+    }
+    
+    .comment-item {
+        background-color: var(--bg-color);
+        border-radius: 8px;
+        padding: 1.5rem;
+        margin-bottom: 1.5rem;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    }
+    
+    .comment-header {
+        display: flex;
+        align-items: center;
+        margin-bottom: 1rem;
+    }
+    
+    .comment-author-avatar {
+        margin-right: 1rem;
+    }
+    
+    .avatar {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-weight: bold;
+        font-size: 0.875rem;
+    }
+    
+    .comment-author-info {
+        flex: 1;
+    }
+    
+    .comment-author-name {
+        color: var(--text-color);
+        font-weight: bold;
+        font-size: 0.875rem;
+        margin-bottom: 0.25rem;
+    }
+    
+    .comment-date {
+        color: var(--secondary-text-color);
+        font-size: 0.75rem;
+    }
+    
+    .delete-comment-btn,
+    .delete-reply-btn {
+        padding: 0.25rem 0.75rem;
+        background-color: var(--error-color);
+        color: white;
+        border: none;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        cursor: pointer;
+        transition: background-color 0.3s;
+    }
+    
+    .delete-comment-btn:hover,
+    .delete-reply-btn:hover {
+        background-color: #c82333;
+    }
+    
+    .comment-content {
+        color: var(--text-color);
+        font-size: 0.875rem;
+        line-height: 1.6;
+        margin-bottom: 1rem;
+        word-wrap: break-word;
+    }
+    
+    .comment-actions {
+        display: flex;
+        gap: 1rem;
+    }
+    
+    .reply-comment-btn,
+    .like-comment-btn {
+        background: none;
+        border: none;
+        color: var(--secondary-text-color);
+        font-size: 0.75rem;
+        cursor: pointer;
+        transition: color 0.3s;
+        padding: 0;
+    }
+    
+    .reply-comment-btn:hover,
+    .like-comment-btn:hover {
+        color: var(--primary-color);
+    }
+    
+    .reply-form-container {
+        margin-top: 1rem;
+        padding-top: 1rem;
+        border-top: 1px solid var(--border-color);
+    }
+    
+    .reply-form {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+    
+    .reply-content {
+        padding: 0.75rem;
+        border: 1px solid var(--border-color);
+        border-radius: 4px;
+        background-color: var(--input-bg-color);
+        color: var(--text-color);
+        font-size: 0.875rem;
+        resize: vertical;
+    }
+    
+    .reply-content:focus {
+        outline: none;
+        border-color: var(--primary-color);
+    }
+    
+    .reply-form-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.75rem;
+    }
+    
+    .submit-reply-btn,
+    .cancel-reply-btn {
+        padding: 0.5rem 1rem;
+        border: none;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        cursor: pointer;
+        transition: background-color 0.3s;
+    }
+    
+    .submit-reply-btn {
+        background-color: var(--primary-color);
+        color: white;
+    }
+    
+    .submit-reply-btn:hover {
+        background-color: var(--primary-color-dark);
+    }
+    
+    .cancel-reply-btn {
+        background-color: var(--secondary-color);
+        color: var(--text-color);
+    }
+    
+    .cancel-reply-btn:hover {
+        background-color: var(--secondary-color-dark);
+    }
+    
+    .replies-container {
+        margin-top: 1rem;
+    }
+    
+    .replies-list {
+        space-y: 0.75rem;
+    }
+    
+    .reply-item {
+        background-color: var(--bg-color);
+        border-radius: 4px;
+        padding: 1rem;
+        margin-left: 2rem;
+        border-left: 3px solid var(--border-color);
+    }
+    
+    .reply-header {
+        display: flex;
+        align-items: center;
+        margin-bottom: 0.5rem;
+    }
+    
+    .reply-author-name {
+        color: var(--text-color);
+        font-weight: bold;
+        font-size: 0.75rem;
+        margin-right: 0.75rem;
+    }
+    
+    .reply-date {
+        color: var(--secondary-text-color);
+        font-size: 0.7rem;
+    }
+    
+    .reply-content {
+        color: var(--text-color);
+        font-size: 0.75rem;
+        line-height: 1.5;
+    }
+    
+    .comments-pagination {
+        margin-top: 2rem;
+        text-align: center;
+    }
+    
+    .pagination-controls {
+        display: flex;
+        justify-content: center;
+        gap: 0.5rem;
+    }
+    
+    .pagination-btn {
+        padding: 0.5rem 1rem;
+        background-color: var(--secondary-color);
+        color: var(--text-color);
+        border: none;
+        border-radius: 4px;
+        font-size: 0.875rem;
+        cursor: pointer;
+        transition: background-color 0.3s;
+    }
+    
+    .pagination-btn:hover {
+        background-color: var(--secondary-color-dark);
+    }
+    
+    .pagination-btn.active {
+        background-color: var(--primary-color);
+        color: white;
+    }
+    
+    @media (max-width: 768px) {
+        .comments-section {
+            padding: 1.5rem;
+        }
+        
+        .comment-header {
+            flex-wrap: wrap;
+        }
+        
+        .comment-actions {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 0.5rem;
+        }
+        
+        .reply-item {
+            margin-left: 1rem;
+        }
+        
+        .pagination-controls {
+            flex-wrap: wrap;
+        }
+    }
+</style>

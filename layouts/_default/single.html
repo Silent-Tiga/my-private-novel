@@ -1,0 +1,32 @@
+{{ define "main" }}
+<div class="article">
+  <h1>{{ .Title }}</h1>
+  <div class="article-meta">
+    <time>{{ .Date.Format "2006-01-02" }}</time>
+    <span class="volume-info">
+      {{ .CurrentSection.Title }}
+    </span>
+  </div>
+  <div class="article-content">
+    {{ .Content }}
+  </div>
+  
+  <!-- 章节导航 -->
+  <nav class="post-nav">
+    {{ with .PrevInSection }}
+      <a href="{{ .Permalink }}" class="prev">上一章: {{ .Title }}</a>
+    {{ end }}
+    {{ with .NextInSection }}
+      <a href="{{ .Permalink }}" class="next">下一章: {{ .Title }}</a>
+    {{ end }}
+  </nav>
+  
+  <!-- 返回分卷 -->
+  <div class="back-to-volume">
+    <a href="{{ .CurrentSection.Permalink }}">返回 {{ .CurrentSection.Title }}</a>
+  </div>
+  
+  <!-- 评论系统 -->
+  {{ partial "comments.html" . }}
+</div>
+{{ end }}

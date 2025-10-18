@@ -1,0 +1,39 @@
+{{ define "main" }}
+<div class="volume">
+  <h1>{{ .Title }}</h1>
+  <div class="volume-content">
+    {{ .Content }}
+  </div>
+  
+  <h2>章节列表</h2>
+  <div class="chapter-list">
+    {{ range .Pages }}
+      <div class="chapter-item">
+        <a href="{{ .Permalink }}">
+          <h3>{{ .Title }}</h3>
+          <p class="date">{{ .Date.Format "2006-01-02" }}</p>
+        </a>
+      </div>
+    {{ end }}
+  </div>
+  
+  <!-- 分卷导航 -->
+  <div class="volume-navigation">
+    {{ if .Parent.Sections.Next . }}
+      <a href="{{ (.Parent.Sections.Next .).Permalink }}" class="next-volume">
+        下一分卷: {{ (.Parent.Sections.Next .).Title }}
+      </a>
+    {{ end }}
+    {{ if .Parent.Sections.Prev . }}
+      <a href="{{ (.Parent.Sections.Prev .).Permalink }}" class="prev-volume">
+        上一分卷: {{ (.Parent.Sections.Prev .).Title }}
+      </a>
+    {{ end }}
+  </div>
+  
+  <!-- 返回小说集 -->
+  <div class="back-to-collection">
+    <a href="{{ .Parent.Permalink }}">返回 {{ .Parent.Title }}</a>
+  </div>
+</div>
+{{ end }}

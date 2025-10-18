@@ -1,0 +1,49 @@
+baseURL: "/"
+title: "我的私人小说"
+languageCode: "zh-CN"
+defaultContentLanguage: "zh"
+
+paginate: 5
+
+menu:
+  main:
+    - identifier: "novel-collections"
+      name: "小说集"
+      url: "/novel-collections/"
+      weight: 10
+    - identifier: "admin"
+      name: "管理员上传"
+      url: "/admin/"
+      weight: 15
+    - identifier: "about"
+      name: "关于"
+      url: "/about/"
+      weight: 20
+
+params:
+  env: development
+  description: "我的私人小说空间"
+  author: "作者"
+  ShowReadingTime: true
+  ShowPostNavLinks: true
+  ShowBreadCrumbs: true
+  ShowCodeCopyButtons: true
+  disableSpecial1stPost: true
+  disableScrollToTop: false
+  comments: false
+  hidemeta: false
+  hideSummary: false
+  showtoc: false
+  tocopen: false
+  # 访问控制配置
+  accessControl:
+    enabled: true
+    accessKey: "novel2024"
+    # 设置为true可以在验证后保持访问权限（基于浏览器本地存储）
+    persistentAccess: true
+  assets:
+    favicon: "/favicon.ico"
+    favicon16x16: "/favicon-16x16.png"
+    favicon32x32: "/favicon-32x32.png"
+    apple_touch_icon: "/apple-touch-icon.png"
+    safari_pinned_tab: "/safari-pinned-tab.svg"

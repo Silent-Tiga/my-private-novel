@@ -1,0 +1,962 @@
+<!DOCTYPE html>
+<html lang="{{ .Site.LanguageCode }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ if .IsHome }}{{ .Site.Title }}{{ else }}{{ .Title }} | {{ .Site.Title }}{{ end }}</title>
+    <meta name="description" content="{{ if .Description }}{{ .Description }}{{ else }}{{ .Site.Params.description }}{{ end }}">
+    <!-- 访问控制配置（JSON，避免IDE误报JS语法） -->
+    <script type="application/json" id="access-control-config">{
+      "enabled": {{ .Site.Params.accessControl.enabled }},
+      "persistentAccess": {{ .Site.Params.accessControl.persistentAccess }},
+      "users": {
+        "admin": {"password":"admin2024","role":"admin","permissions":["read","write","delete","admin"]},
+        "editor": {"password":"editor2024","role":"editor","permissions":["read","write"]},
+        "reader": {"password":"reader2024","role":"reader","permissions":["read"]}
+      },
+      "defaultAccessKey": "{{ .Site.Params.accessControl.accessKey }}",
+      "defaultRole": "reader",
+      "jwtSecret": "your-secret-key-123456",
+      "jwtExpiration": 86400000,
+      "whitelistPaths": ["/login/","/about/"]
+    }</script>
+    <!-- 增强的访问控制系统 -->
+    <script>
+        // 访问控制配置（从JSON加载，避免IDE误报JS语法）
+        (function(){
+            try {
+                const el = document.getElementById('access-control-config');
+                const cfg = el ? JSON.parse(el.textContent) : {};
+                window.accessControl = window.accessControl || cfg;
+            } catch (e) {
+                console.warn('Failed to parse access-control-config JSON', e);
+                window.accessControl = window.accessControl || {};
+            }
+        })();
+        const accessControl = window.accessControl;
+
+        // 生成JWT令牌
+        function generateJWT(user, role, permissions) {
+            const header = {
+                alg: 'HS256',
+                typ: 'JWT'
+            };
+            
+            const payload = {
+                sub: user,
+                role: role,
+                permissions: permissions,
+                exp: Date.now() + accessControl.jwtExpiration,
+                iat: Date.now()
+            };
+            
+            // 简化版的JWT生成（实际应用中应使用更安全的实现）
+            const encodedHeader = btoa(JSON.stringify(header));
+            const encodedPayload = btoa(JSON.stringify(payload));
+            
+            // 简化的签名（仅用于演示，生产环境应使用更安全的方法）
+            const signature = btoa(`${encodedHeader}.${encodedPayload}.${accessControl.jwtSecret}`);
+            
+            return `${encodedHeader}.${encodedPayload}.${signature}`;
+        }
+
+        // 验证JWT令牌
+        function verifyJWT(token) {
+            try {
+                const parts = token.split('.');
+                if (parts.length !== 3) {
+                    return null;
+                }
+                
+                const payload = JSON.parse(atob(parts[1]));
+                
+                // 检查令牌是否过期
+                if (payload.exp < Date.now()) {
+                    return null;
+                }
+                
+                // 检查签名（简化版）
+                const expectedSignature = btoa(`${parts[0]}.${parts[1]}.${accessControl.jwtSecret}`);
+                if (parts[2] !== expectedSignature) {
+                    return null;
+                }
+                
+                return payload;
+            } catch (e) {
+                console.error('JWT验证失败:', e);
+                return null;
+            }
+        }
+
+        // 获取当前用户信息
+        function getCurrentUser() {
+            const token = localStorage.getItem('authToken');
+            if (!token) {
+                return null;
+            }
+            
+            return verifyJWT(token);
+        }
+
+        // 检查访问权限
+        function checkAccess() {
+            // 检查白名单路径
+            const path = window.location.pathname;
+            for (const whitelistPath of accessControl.whitelistPaths) {
+                if (path.startsWith(whitelistPath)) {
+                    return true;
+                }
+            }
+
+            // 检查JWT令牌
+            const user = getCurrentUser();
+            if (user) {
+                return true;
+            }
+
+            // 检查是否有持久化访问（兼容旧版本）
+            if (accessControl.persistentAccess) {
+                const hasAccess = localStorage.getItem('novelAccessVerified') === 'true' || localStorage.getItem('hasAccess') === 'true';
+                if (hasAccess) {
+                    // 自动升级到JWT认证
+                    const token = generateJWT('legacy-user', accessControl.defaultRole, ['read']);
+                    localStorage.setItem('authToken', token);
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        // 设置访问权限
+        function setAccess(username, password) {
+            // 检查用户名密码
+            if (username && password) {
+                if (accessControl.users[username] && accessControl.users[username].password === password) {
+                    const user = accessControl.users[username];
+                    const token = generateJWT(username, user.role, user.permissions);
+                    localStorage.setItem('authToken', token);
+                    localStorage.setItem('currentUser', JSON.stringify({name: username, role: user.role}));
+                    return { success: true, role: user.role };
+                }
+            }
+            
+            // 检查默认访问密钥
+            if (password === accessControl.defaultAccessKey) {
+                const token = generateJWT('default-user', accessControl.defaultRole, ['read']);
+                localStorage.setItem('authToken', token);
+                localStorage.setItem('currentUser', JSON.stringify({name: 'default-user', role: accessControl.defaultRole}));
+                return { success: true, role: accessControl.defaultRole };
+            }
+            
+            return { success: false, error: '用户名或密码错误' };
+        }
+
+        // 清除访问权限
+        function clearAccess() {
+            localStorage.removeItem('authToken');
+            localStorage.removeItem('novelAccessVerified');
+            localStorage.removeItem('hasAccess');
+        }
+
+        // 检查用户是否有特定权限
+        function hasPermission(permission) {
+            const user = getCurrentUser();
+            if (!user || !user.permissions) {
+                return false;
+            }
+            return user.permissions.includes(permission);
+        }
+
+        // 显示用户信息
+        function showUserInfo() {
+            const user = getCurrentUser();
+            if (!user) {
+                return;
+            }
+            
+            // 创建用户信息区域
+            const userInfo = document.createElement('div');
+            userInfo.className = 'user-info';
+            userInfo.style.position = 'fixed';
+            userInfo.style.top = '10px';
+            userInfo.style.right = '10px';
+            userInfo.style.padding = '8px 12px';
+            userInfo.style.backgroundColor = 'var(--card-bg-color, #f9f9f9)';
+            userInfo.style.borderRadius = '4px';
+            userInfo.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.1)';
+            userInfo.style.display = 'flex';
+            userInfo.style.alignItems = 'center';
+            userInfo.style.gap = '8px';
+            
+            // 用户角色
+            const roleSpan = document.createElement('span');
+            roleSpan.textContent = `角色: ${user.role}`;
+            roleSpan.style.color = 'var(--text-color, #333)';
+            roleSpan.style.fontSize = '0.875rem';
+            
+            // 登出按钮
+            const logoutButton = document.createElement('button');
+            logoutButton.textContent = '登出';
+            logoutButton.style.padding = '4px 8px';
+            logoutButton.style.backgroundColor = '#e74c3c';
+            logoutButton.style.color = 'white';
+            logoutButton.style.border = 'none';
+            logoutButton.style.borderRadius = '4px';
+            logoutButton.style.fontSize = '0.75rem';
+            logoutButton.style.cursor = 'pointer';
+            
+            logoutButton.addEventListener('click', function() {
+                clearAccess();
+                location.reload();
+            });
+            
+            // 组装用户信息
+            userInfo.appendChild(roleSpan);
+            userInfo.appendChild(logoutButton);
+            
+            // 添加到页面
+            document.body.appendChild(userInfo);
+        }
+
+        // 创建登录表单
+        function createLoginForm() {
+            // 清空页面内容
+            document.body.innerHTML = '';
+            
+            // 设置登录页面样式
+            document.body.style.backgroundColor = '#f5f5f5';
+            document.body.style.display = 'flex';
+            document.body.style.flexDirection = 'column';
+            document.body.style.justifyContent = 'center';
+            document.body.style.alignItems = 'center';
+            document.body.style.minHeight = '100vh';
+            document.body.style.margin = '0';
+            document.body.style.padding = '0';
+            document.body.style.boxSizing = 'border-box';
+            
+            // 创建登录容器
+            const loginContainer = document.createElement('div');
+            loginContainer.style.width = '100%';
+            loginContainer.style.maxWidth = '400px';
+            loginContainer.style.padding = '2rem';
+            loginContainer.style.backgroundColor = 'white';
+            loginContainer.style.borderRadius = '8px';
+            loginContainer.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.1)';
+            loginContainer.style.textAlign = 'center';
+            
+            // 创建标题
+            const title = document.createElement('h1');
+            title.textContent = '私人小说库';
+            title.style.color = '#3a7bd5';
+            title.style.marginBottom = '1.5rem';
+            title.style.fontSize = '1.8rem';
+            
+            // 创建描述
+            const description = document.createElement('p');
+            description.textContent = '请登录以继续';
+            description.style.color = '#666';
+            description.style.marginBottom = '2rem';
+            
+            // 创建表单
+            const form = document.createElement('form');
+            form.addEventListener('submit', function(event) {
+                event.preventDefault();
+                const username = document.getElementById('username').value;
+                const password = document.getElementById('password').value;
+                
+                const result = setAccess(username, password);
+                if (result.success) {
+                    location.reload();
+                } else {
+                    document.getElementById('errorMessage').textContent = result.error;
+                    setTimeout(function() {
+                        document.getElementById('errorMessage').textContent = '';
+                    }, 3000);
+                }
+            });
+            
+            // 创建用户名输入框
+            const usernameContainer = document.createElement('div');
+            usernameContainer.style.marginBottom = '1.5rem';
+            
+            const usernameLabel = document.createElement('label');
+            usernameLabel.textContent = '用户名（可选）';
+            usernameLabel.htmlFor = 'username';
+            usernameLabel.style.display = 'block';
+            usernameLabel.style.textAlign = 'left';
+            usernameLabel.style.color = '#333';
+            usernameLabel.style.marginBottom = '0.5rem';
+            
+            const usernameInput = document.createElement('input');
+            usernameInput.type = 'text';
+            usernameInput.id = 'username';
+            usernameInput.placeholder = 'admin/editor/reader（留空使用默认访问）';
+            usernameInput.style.width = '100%';
+            usernameInput.style.padding = '0.75rem';
+            usernameInput.style.border = '1px solid #ddd';
+            usernameInput.style.borderRadius = '4px';
+            usernameInput.style.backgroundColor = 'white';
+            usernameInput.style.color = '#333';
+            usernameInput.style.fontSize = '1rem';
+            
+            usernameInput.addEventListener('focus', function() {
+                usernameInput.style.borderColor = '#3a7bd5';
+            });
+            
+            usernameInput.addEventListener('blur', function() {
+                usernameInput.style.borderColor = '#ddd';
+            });
+            
+            usernameContainer.appendChild(usernameLabel);
+            usernameContainer.appendChild(usernameInput);
+            
+            // 创建密码输入框
+            const passwordContainer = document.createElement('div');
+            passwordContainer.style.marginBottom = '1.5rem';
+            
+            const passwordLabel = document.createElement('label');
+            passwordLabel.textContent = '密码';
+            passwordLabel.htmlFor = 'password';
+            passwordLabel.style.display = 'block';
+            passwordLabel.style.textAlign = 'left';
+            passwordLabel.style.color = '#333';
+            passwordLabel.style.marginBottom = '0.5rem';
+            
+            const passwordInput = document.createElement('input');
+            passwordInput.type = 'password';
+            passwordInput.id = 'password';
+            passwordInput.placeholder = '请输入访问密码';
+            passwordInput.style.width = '100%';
+            passwordInput.style.padding = '0.75rem';
+            passwordInput.style.border = '1px solid #ddd';
+            passwordInput.style.borderRadius = '4px';
+            passwordInput.style.backgroundColor = 'white';
+            passwordInput.style.color = '#333';
+            passwordInput.style.fontSize = '1rem';
+            passwordInput.setAttribute('autocomplete', 'off');
+            
+            passwordInput.addEventListener('focus', function() {
+                passwordInput.style.borderColor = '#3a7bd5';
+            });
+            
+            passwordInput.addEventListener('blur', function() {
+                passwordInput.style.borderColor = '#ddd';
+            });
+            
+            passwordContainer.appendChild(passwordLabel);
+            passwordContainer.appendChild(passwordInput);
+            
+            // 创建错误信息
+            const errorMessage = document.createElement('div');
+            errorMessage.id = 'errorMessage';
+            errorMessage.style.color = '#e74c3c';
+            errorMessage.style.fontSize = '0.875rem';
+            errorMessage.style.marginTop = '0.5rem';
+            
+            // 创建提交按钮
+            const submitButton = document.createElement('button');
+            submitButton.type = 'submit';
+            submitButton.textContent = '登录';
+            submitButton.style.width = '100%';
+            submitButton.style.padding = '0.75rem';
+            submitButton.style.backgroundColor = '#3a7bd5';
+            submitButton.style.color = 'white';
+            submitButton.style.border = 'none';
+            submitButton.style.borderRadius = '4px';
+            submitButton.style.fontSize = '1rem';
+            submitButton.style.cursor = 'pointer';
+            submitButton.style.transition = 'background-color 0.3s';
+            
+            submitButton.addEventListener('mouseenter', function() {
+                submitButton.style.backgroundColor = '#00d2ff';
+            });
+            
+            submitButton.addEventListener('mouseleave', function() {
+                submitButton.style.backgroundColor = '#3a7bd5';
+            });
+            
+            // 组装表单
+            form.appendChild(usernameContainer);
+            form.appendChild(passwordContainer);
+            form.appendChild(errorMessage);
+            form.appendChild(submitButton);
+            
+            // 组装登录容器
+            loginContainer.appendChild(title);
+            loginContainer.appendChild(description);
+            loginContainer.appendChild(form);
+            
+            // 添加到页面
+            document.body.appendChild(loginContainer);
+        }
+
+        // 初始化访问控制
+        function initAccessControl() {
+            if (accessControl.enabled) {
+                const hasAccess = checkAccess();
+                if (!hasAccess) {
+                    createLoginForm();
+                } else {
+                    // 显示用户信息
+                    showUserInfo();
+                    
+                    // 根据用户权限显示/隐藏内容
+                    applyPermissionControls();
+                }
+            }
+        }
+
+        // 应用权限控制到页面元素
+        function applyPermissionControls() {
+            // 根据权限显示/隐藏特定元素
+            document.querySelectorAll('[data-permission]').forEach(element => {
+                const requiredPermission = element.getAttribute('data-permission');
+                if (!hasPermission(requiredPermission)) {
+                    element.style.display = 'none';
+                }
+            });
+        }
+
+        // 页面加载时初始化访问控制
+        window.addEventListener('DOMContentLoaded', initAccessControl);
+        
+        // 暴露API给其他脚本使用
+        window.auth = {
+            hasPermission,
+            getCurrentUser,
+            clearAccess
+        };
+    </script>
+    <style>
+        :root {
+          --primary-color: #3a7bd5;
+          --secondary-color: #00d2ff;
+          --text-color: #333;
+          --light-text: #666;
+          --background-color: #fff;
+          --card-bg: #f9f9f9;
+          --border-color: #eee;
+          --hover-bg: #f0f8ff;
+        }
+        
+        * {
+          box-sizing: border-box;
+          margin: 0;
+          padding: 0;
+        }
+        
+        body {
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+          line-height: 1.6;
+          color: var(--text-color);
+          background-color: var(--background-color);
+          max-width: 900px;
+          margin: 0 auto;
+          padding: 20px;
+        }
+        
+        header {
+          border-bottom: 1px solid var(--border-color);
+          padding-bottom: 20px;
+          margin-bottom: 30px;
+        }
+        
+        header h1 {
+          color: var(--primary-color);
+          margin-bottom: 10px;
+        }
+        
+        header p {
+          color: var(--light-text);
+        }
+        
+        nav {
+          margin-bottom: 30px;
+        }
+        
+        nav ul {
+          list-style: none;
+          display: flex;
+          gap: 25px;
+          flex-wrap: wrap;
+        }
+        
+        nav a {
+          text-decoration: none;
+          color: var(--primary-color);
+          font-weight: 500;
+          padding: 8px 0;
+          border-bottom: 2px solid transparent;
+          transition: all 0.3s ease;
+        }
+        
+        nav a:hover {
+          border-bottom-color: var(--primary-color);
+        }
+        
+        main {
+          min-height: 500px;
+        }
+        
+        h1, h2, h3 {
+          margin-bottom: 20px;
+          line-height: 1.3;
+        }
+        
+        h1 {
+          font-size: 2.2rem;
+        }
+        
+        h2 {
+          font-size: 1.8rem;
+          margin-top: 40px;
+          color: var(--primary-color);
+        }
+        
+        h3 {
+          font-size: 1.4rem;
+          margin-top: 30px;
+        }
+        
+        p {
+          margin-bottom: 20px;
+        }
+        
+        a {
+          color: var(--primary-color);
+          text-decoration: none;
+          transition: color 0.3s ease;
+        }
+        
+        a:hover {
+          color: var(--secondary-color);
+        }
+        
+        /* 小说集样式 */
+        .novel-collections {
+          margin-top: 30px;
+        }
+        
+        .collection-list {
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+          gap: 20px;
+          margin-top: 20px;
+        }
+        
+        .collection-item {
+          background-color: var(--card-bg);
+          padding: 20px;
+          border-radius: 8px;
+          transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        
+        .collection-item:hover {
+          transform: translateY(-5px);
+          box-shadow: 0 10px 20px rgba(0,0,0,0.1);
+        }
+        
+        .collection-item h2 {
+          margin-top: 0;
+          font-size: 1.5rem;
+        }
+        
+        /* 分卷样式 */
+        .volume-list {
+          margin-top: 20px;
+        }
+        
+        .volume-item {
+          background-color: var(--card-bg);
+          padding: 20px;
+          border-radius: 8px;
+          margin-bottom: 20px;
+          transition: background-color 0.3s ease;
+        }
+        
+        .volume-item:hover {
+          background-color: var(--hover-bg);
+        }
+        
+        /* 章节样式 */
+        .chapter-list {
+          margin-top: 20px;
+        }
+        
+        .chapter-item {
+          padding: 15px 0;
+          border-bottom: 1px solid var(--border-color);
+          transition: padding-left 0.3s ease;
+        }
+        
+        .chapter-item:hover {
+          padding-left: 10px;
+        }
+        
+        .chapter-item:last-child {
+          border-bottom: none;
+        }
+        
+        .chapter-item .date {
+          color: var(--light-text);
+          font-size: 0.9rem;
+          margin-top: 5px;
+        }
+        
+        /* 文章样式 */
+        .article {
+          margin-top: 30px;
+        }
+        
+        .article-meta {
+          display: flex;
+          gap: 20px;
+          color: var(--light-text);
+          margin-bottom: 20px;
+          font-size: 0.9rem;
+        }
+        
+        .article-content {
+          margin-top: 30px;
+        }
+        
+        .article-content h2 {
+          margin-top: 40px;
+          margin-bottom: 20px;
+        }
+        
+        .article-content h3 {
+          margin-top: 30px;
+          margin-bottom: 15px;
+        }
+        
+        .article-content p {
+          margin-bottom: 20px;
+          text-align: justify;
+        }
+        
+        /* 导航样式 */
+        .post-nav {
+          display: flex;
+          justify-content: space-between;
+          margin-top: 40px;
+          padding-top: 20px;
+          border-top: 1px solid var(--border-color);
+        }
+        
+        .next-volume, .prev-volume, .next-chapter, .prev-chapter {
+          padding: 10px 15px;
+          background-color: var(--card-bg);
+          border-radius: 5px;
+          display: inline-block;
+          margin: 10px 0;
+        }
+        
+        .back-to-collection, .back-to-volume {
+          margin-top: 20px;
+          text-align: center;
+        }
+        
+        .back-to-collection a, .back-to-volume a {
+          display: inline-block;
+          padding: 10px 20px;
+          background-color: var(--primary-color);
+          color: white;
+          border-radius: 5px;
+          transition: background-color 0.3s ease;
+        }
+        
+        .back-to-collection a:hover, .back-to-volume a:hover {
+          background-color: var(--secondary-color);
+          color: white;
+        }
+        
+        /* 最新更新样式 */
+        .latest-updates {
+          margin-top: 20px;
+        }
+        
+        .update-item {
+          padding: 15px 0;
+          border-bottom: 1px solid var(--border-color);
+        }
+        
+        .update-item:last-child {
+          border-bottom: none;
+        }
+        
+        .update-item .meta {
+          color: var(--light-text);
+          font-size: 0.9rem;
+          margin-top: 5px;
+        }
+        
+        footer {
+          margin-top: 60px;
+          padding-top: 30px;
+          border-top: 1px solid var(--border-color);
+          text-align: center;
+          color: var(--light-text);
+          font-size: 0.9rem;
+        }
+        
+        /* 响应式设计 */
+        @media (max-width: 768px) {
+          h1 {
+            font-size: 1.8rem;
+          }
+          
+          h2 {
+            font-size: 1.5rem;
+          }
+          
+          h3 {
+            font-size: 1.2rem;
+          }
+          
+          .collection-list {
+            grid-template-columns: 1fr;
+          }
+          
+          .post-nav {
+            flex-direction: column;
+            gap: 10px;
+          }
+          
+          .article-meta {
+            flex-direction: column;
+            gap: 5px;
+          }
+        }
+    </style>
+</head>
+<body>
+    {{ partial "header.html" . }}
+    {{ partial "nav.html" . }}
+    <main>
+        {{ block "main" . }}{{ end }}
+    </main>
+    {{ partial "footer.html" . }}
+    
+    <!-- 前端上传器 -->
+    <div id="uploader-float-btn" style="display: none; position: fixed; bottom: 30px; right: 30px; z-index: 1000;">
+        <button id="show-uploader-btn" style="width: 60px; height: 60px; border-radius: 50%; background-color: var(--primary-color); color: white; border: none; font-size: 24px; cursor: pointer; box-shadow: 0 2px 10px rgba(0,0,0,0.2); transition: all 0.3s ease;">
+            +
+        </button>
+    </div>
+    
+    <!-- 上传器模态框 -->
+    <div id="uploader-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); z-index: 1001; justify-content: center; align-items: center;">
+        <div id="uploader-container" style="background-color: white; border-radius: 8px; padding: 20px; width: 100%; max-width: 600px; max-height: 80vh; overflow-y: auto;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h2 style="color: var(--text-color); margin: 0;">内容上传</h2>
+                <button id="close-uploader-btn" style="background: none; border: none; font-size: 24px; cursor: pointer; color: var(--light-text);">×</button>
+            </div>
+            
+            <form id="upload-form">
+                <div style="margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 5px; color: var(--text-color);">上传类型</label>
+                    <select id="upload-type" style="width: 100%; padding: 10px; border: 1px solid var(--border-color); border-radius: 4px;">
+                        <option value="chapter">章节</option>
+                        <option value="volume">分卷</option>
+                        <option value="collection">小说集</option>
+                    </select>
+                </div>
+                
+                <div id="collection-fields" style="margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 5px; color: var(--text-color);">小说集名称</label>
+                    <input type="text" id="collection-name" style="width: 100%; padding: 10px; border: 1px solid var(--border-color); border-radius: 4px;">
+                </div>
+                
+                <div id="volume-fields" style="margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 5px; color: var(--text-color);">分卷名称</label>
+                    <input type="text" id="volume-name" style="width: 100%; padding: 10px; border: 1px solid var(--border-color); border-radius: 4px;">
+                </div>
+                
+                <div id="chapter-fields" style="margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 5px; color: var(--text-color);">章节标题</label>
+                    <input type="text" id="chapter-title" style="width: 100%; padding: 10px; border: 1px solid var(--border-color); border-radius: 4px;">
+                </div>
+                
+                <div style="margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 5px; color: var(--text-color);">内容（支持Markdown格式）</label>
+                    <textarea id="content" rows="10" style="width: 100%; padding: 10px; border: 1px solid var(--border-color); border-radius: 4px; resize: vertical;"></textarea>
+                </div>
+                
+                <div style="margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 5px; color: var(--text-color);">标签（用逗号分隔）</label>
+                    <input type="text" id="tags" style="width: 100%; padding: 10px; border: 1px solid var(--border-color); border-radius: 4px;" placeholder="如：冒险, 科幻, 悬疑">
+                </div>
+                
+                <div style="margin-bottom: 20px;">
+                    <label style="display: block; margin-bottom: 5px; color: var(--text-color);">是否为草稿</label>
+                    <input type="checkbox" id="draft" style="margin-right: 10px;">
+                    <span style="color: var(--light-text);">勾选表示保存为草稿</span>
+                </div>
+                
+                <div style="display: flex; gap: 10px;">
+                    <button type="submit" style="flex: 1; padding: 12px; background-color: var(--primary-color); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px;">保存内容</button>
+                </div>
+            </form>
+            
+            <div id="upload-status" style="margin-top: 20px; text-align: center;"></div>
+        </div>
+    </div>
+    
+    <script>
+        // 初始化上传器
+        function initUploader() {
+            const user = getCurrentUser();
+            const floatBtn = document.getElementById('uploader-float-btn');
+            const modal = document.getElementById('uploader-modal');
+            const showBtn = document.getElementById('show-uploader-btn');
+            const closeBtn = document.getElementById('close-uploader-btn');
+            const uploadForm = document.getElementById('upload-form');
+            const uploadType = document.getElementById('upload-type');
+            const collectionFields = document.getElementById('collection-fields');
+            const volumeFields = document.getElementById('volume-fields');
+            const chapterFields = document.getElementById('chapter-fields');
+            const uploadStatus = document.getElementById('upload-status');
+            
+            // 检查用户是否有写权限
+            if (user && hasPermission('write')) {
+                floatBtn.style.display = 'block';
+            }
+            
+            // 根据上传类型显示/隐藏相应的字段
+            function toggleUploadFields() {
+                const type = uploadType.value;
+                
+                collectionFields.style.display = type === 'volume' || type === 'chapter' ? 'block' : 'none';
+                volumeFields.style.display = type === 'chapter' ? 'block' : 'none';
+                chapterFields.style.display = type === 'chapter' ? 'block' : 'none';
+            }
+            
+            // 显示上传器
+            showBtn.addEventListener('click', function() {
+                modal.style.display = 'flex';
+                toggleUploadFields();
+            });
+            
+            // 关闭上传器
+            closeBtn.addEventListener('click', function() {
+                modal.style.display = 'none';
+                uploadStatus.innerHTML = '';
+                uploadForm.reset();
+            });
+            
+            // 点击模态框背景关闭
+            modal.addEventListener('click', function(e) {
+                if (e.target === modal) {
+                    modal.style.display = 'none';
+                    uploadStatus.innerHTML = '';
+                    uploadForm.reset();
+                }
+            });
+            
+            // 监听上传类型变化
+            uploadType.addEventListener('change', toggleUploadFields);
+            
+            // 处理表单提交
+            uploadForm.addEventListener('submit', function(e) {
+                e.preventDefault();
+                
+                // 获取表单数据
+                const type = uploadType.value;
+                const collectionName = document.getElementById('collection-name').value.trim();
+                const volumeName = document.getElementById('volume-name').value.trim();
+                const chapterTitle = document.getElementById('chapter-title').value.trim();
+                const content = document.getElementById('content').value.trim();
+                const tags = document.getElementById('tags').value.trim();
+                const isDraft = document.getElementById('draft').checked;
+                
+                // 表单验证
+                if (type === 'chapter' && (!collectionName || !volumeName || !chapterTitle || !content)) {
+                    uploadStatus.innerHTML = '<span style="color: red;">请填写所有必填字段</span>';
+                    return;
+                }
+                
+                if (type === 'volume' && (!collectionName || !volumeName)) {
+                    uploadStatus.innerHTML = '<span style="color: red;">请填写小说集名称和分卷名称</span>';
+                    return;
+                }
+                
+                if (type === 'collection' && !collectionName) {
+                    uploadStatus.innerHTML = '<span style="color: red;">请填写小说集名称</span>';
+                    return;
+                }
+                
+                // 显示保存状态
+                uploadStatus.innerHTML = '<span style="color: var(--primary-color);">保存中...</span>';
+                
+                // 模拟保存过程
+                setTimeout(function() {
+                    // 在实际应用中，这里应该调用后端API来保存内容
+                    // 这里我们只是模拟保存成功
+                    
+                    // 构建内容数据
+                    const contentData = {
+                        type: type,
+                        collectionName: collectionName,
+                        volumeName: volumeName,
+                        chapterTitle: chapterTitle,
+                        content: content,
+                        tags: tags ? tags.split(',').map(tag => tag.trim()) : [],
+                        isDraft: isDraft,
+                        author: user ? user.sub : 'admin',
+                        date: new Date().toISOString()
+                    };
+                    
+                    // 存储到localStorage作为演示
+                    let contents = JSON.parse(localStorage.getItem('uploadedContents') || '[]');
+                    contents.push(contentData);
+                    localStorage.setItem('uploadedContents', JSON.stringify(contents));
+                    
+                    // 显示保存成功
+                    uploadStatus.innerHTML = '<span style="color: green;">保存成功！</span>';
+                    
+                    // 重置表单
+                    setTimeout(function() {
+                        modal.style.display = 'none';
+                        uploadStatus.innerHTML = '';
+                        uploadForm.reset();
+                        
+                        // 显示成功提示
+                        alert('内容保存成功！在实际应用中，系统会自动生成相应的文件并更新网站。');
+                    }, 1500);
+                }, 1500);
+            });
+        }
+        
+        // 在页面加载完成后初始化上传器
+        document.addEventListener('DOMContentLoaded', function() {
+            // 检查用户是否登录并有写权限
+            const user = getCurrentUser();
+            if (user && hasPermission('write')) {
+                initUploader();
+            }
+        });
+    </script>
+</body>
+</html>
+<script>
+  window.CF_MEDIA_BASE = window.CF_MEDIA_BASE || 'https://your-worker-subdomain.workers.dev';
+  function getAuthJWTForMedia() {
+    try {
+      if (typeof generateJWT !== 'function') return '';
+      const user = (typeof getCurrentUser === 'function') ? getCurrentUser() : null;
+      if (!user) return '';
+      // 使用现有的 generateJWT(userId, role, permissions) 生成令牌
+      return generateJWT(user.sub || user.name || 'anonymous', user.role || 'reader', ['read']);
+    } catch(e) { return ''; }
+  }
+  function cfMediaUrl(key) {
+    try {
+      const base = window.CF_MEDIA_BASE || '';
+      const t = getAuthJWTForMedia();
+      const q = `key=${encodeURIComponent(key)}${t ? `&t=${encodeURIComponent(t)}` : ''}`;
+      return `${base.replace(/\/$/, '')}/api/media/get?${q}`;
+    } catch(e) { return key; }
+  }
+</script>
