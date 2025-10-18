@@ -22,8 +22,8 @@ dist/
 *.swp
 *.swo
 *~
-
-# OS generated files
+# Hugo build lock
+.hugo_build.lock
 .DS_Store
 .DS_Store?
 ._*
