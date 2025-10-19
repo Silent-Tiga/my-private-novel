@@ -804,6 +804,62 @@
         </div>
     </div>
     
+    <!-- 管理员页面快捷操作（当前页面 Front Matter） -->
+    <div id="admin-quick-actions" data-permission="write" style="display: none; position: fixed; bottom: 30px; left: 30px; z-index: 1000; background: white; border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.15);">
+        <div style="font-weight: 600; margin-bottom: 8px;">页面快捷操作</div>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+            <button id="enable-comments" style="padding: 8px 10px; background: #27ae60; color: #fff; border: none; border-radius: 4px; cursor: pointer;">开启评论</button>
+            <button id="disable-comments" style="padding: 8px 10px; background: #c0392b; color: #fff; border: none; border-radius: 4px; cursor: pointer;">关闭评论</button>
+            <input id="card-title" placeholder="卡片标题" style="padding: 8px; border: 1px solid var(--border-color); border-radius: 4px;">
+            <input id="card-url" placeholder="卡片URL" style="padding: 8px; border: 1px solid var(--border-color); border-radius: 4px;">
+            <input id="card-image" placeholder="卡片图片（可选）" style="padding: 8px; border: 1px solid var(--border-color); border-radius: 4px;">
+            <button id="add-card" style="padding: 8px 10px; background: var(--primary-color); color: #fff; border: none; border-radius: 4px; cursor: pointer;">添加卡片</button>
+        </div>
+        <div id="admin-action-status" style="margin-top: 8px; font-size: 0.9rem; color: var(--light-text);"></div>
+    </div>
+    <script>
+        // 当前页面对应的 Markdown 路径（如果可用）
+        window.CURRENT_MD_PATH = "{{ with .File }}{{ .Path }}{{ else }}{{ "" }}{{ end }}";
+        
+        // 管理员快捷操作逻辑
+        document.addEventListener('DOMContentLoaded', function() {
+            const user = getCurrentUser();
+            const panel = document.getElementById('admin-quick-actions');
+            const statusEl = document.getElementById('admin-action-status');
+            if (user && hasPermission('write')) {
+                panel.style.display = 'block';
+            }
+            async function callUpdate(path, action, payload, message) {
+                try {
+                    const body = { repo: 'Silent-Tiga/my-private-novel', path, action, payload, message };
+                    const res = await fetch('/.netlify/functions/update-md', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+                    });
+                    const json = await res.json();
+                    if (!res.ok) throw new Error(json && json.error ? json.error : `HTTP ${res.status}`);
+                    statusEl.textContent = '操作成功，Netlify 将自动重新构建。';
+                } catch(err) {
+                    statusEl.textContent = `操作失败：${err.message}`;
+                }
+            }
+            document.getElementById('enable-comments').addEventListener('click', function(){
+                if (!window.CURRENT_MD_PATH) { statusEl.textContent = '当前页面无关联文件路径'; return; }
+                callUpdate(window.CURRENT_MD_PATH, 'toggle_comments', { enabled: true }, 'Enable comments');
+            });
+            document.getElementById('disable-comments').addEventListener('click', function(){
+                if (!window.CURRENT_MD_PATH) { statusEl.textContent = '当前页面无关联文件路径'; return; }
+                callUpdate(window.CURRENT_MD_PATH, 'toggle_comments', { enabled: false }, 'Disable comments');
+            });
+            document.getElementById('add-card').addEventListener('click', function(){
+                if (!window.CURRENT_MD_PATH) { statusEl.textContent = '当前页面无关联文件路径'; return; }
+                const title = document.getElementById('card-title').value.trim();
+                const url = document.getElementById('card-url').value.trim();
+                const image = document.getElementById('card-image').value.trim();
+                if (!title || !url) { statusEl.textContent = '请填写卡片标题与URL'; return; }
+                callUpdate(window.CURRENT_MD_PATH, 'set_cards', { cards: [{ title, url, image }] }, 'Add card');
+            });
+        });
+    </script>
     <script>
         // 初始化上传器
         function initUploader() {
@@ -890,42 +946,57 @@
                 // 显示保存状态
                 uploadStatus.innerHTML = '<span style="color: var(--primary-color);">保存中...</span>';
                 
-                // 模拟保存过程
-                setTimeout(function() {
-                    // 在实际应用中，这里应该调用后端API来保存内容
-                    // 这里我们只是模拟保存成功
-                    
-                    // 构建内容数据
-                    const contentData = {
-                        type: type,
-                        collectionName: collectionName,
-                        volumeName: volumeName,
-                        chapterTitle: chapterTitle,
-                        content: content,
-                        tags: tags ? tags.split(',').map(tag => tag.trim()) : [],
-                        isDraft: isDraft,
-                        author: user ? user.sub : 'admin',
-                        date: new Date().toISOString()
-                    };
-                    
-                    // 存储到localStorage作为演示
-                    let contents = JSON.parse(localStorage.getItem('uploadedContents') || '[]');
-                    contents.push(contentData);
-                    localStorage.setItem('uploadedContents', JSON.stringify(contents));
-                    
-                    // 显示保存成功
-                    uploadStatus.innerHTML = '<span style="color: green;">保存成功！</span>';
-                    
-                    // 重置表单
-                    setTimeout(function() {
-                        modal.style.display = 'none';
-                        uploadStatus.innerHTML = '';
-                        uploadForm.reset();
-                        
-                        // 显示成功提示
-                        alert('内容保存成功！在实际应用中，系统会自动生成相应的文件并更新网站。');
-                    }, 1500);
-                }, 1500);
+                // 调用 Netlify Function 保存到 GitHub 仓库
+                (async () => {
+                    try {
+                        const repo = 'Silent-Tiga/my-private-novel';
+                        const slugify = (s) => s.toLowerCase().trim().replace(/\s+/g, '-').replace(/[^a-z0-9\-]/g, '');
+                        const base = 'content/novel-collections';
+                        let targetPath = '';
+                        let title = '';
+                        if (type === 'collection') {
+                            title = collectionName;
+                            targetPath = `${base}/${slugify(collectionName)}/_index.md`;
+                        } else if (type === 'volume') {
+                            title = volumeName;
+                            targetPath = `${base}/${slugify(collectionName)}/${slugify(volumeName)}/_index.md`;
+                        } else {
+                            title = chapterTitle;
+                            targetPath = `${base}/${slugify(collectionName)}/${slugify(volumeName)}/${slugify(chapterTitle)}.md`;
+                        }
+                        const fm = {
+                            title,
+                            draft: !!isDraft,
+                            date: new Date().toISOString(),
+                            tags: tags ? tags.split(',').map(t => t.trim()).filter(Boolean) : []
+                        };
+                        const body = {
+                            repo,
+                            path: targetPath,
+                            action: 'create_entry',
+                            title,
+                            draft: !!isDraft,
+                            frontmatter: fm,
+                            content,
+                            message: `Create ${type}: ${title}`
+                        };
+                        const res = await fetch('/.netlify/functions/update-md', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(body)
+                        });
+                        const json = await res.json();
+                        if (!res.ok) throw new Error(json && json.error ? json.error : `HTTP ${res.status}`);
+                        uploadStatus.innerHTML = '<span style="color: green;">保存成功，Netlify 将自动重新构建。</span>';
+                        setTimeout(function() {
+                            modal.style.display = 'none';
+                            uploadStatus.innerHTML = '';
+                            uploadForm.reset();
+                        }, 1500);
+                    } catch (err) {
+                        uploadStatus.innerHTML = `<span style="color: red;">保存失败：${err.message}</span>`;
+                    }
+                })();
             });
         }
         
