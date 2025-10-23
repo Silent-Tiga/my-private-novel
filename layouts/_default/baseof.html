@@ -16,7 +16,7 @@
       },
       "defaultAccessKey": "{{ .Site.Params.accessControl.accessKey }}",
       "defaultRole": "reader",
-      "jwtSecret": "your-secret-key-123456",
+      "jwtSecret": "",
       "jwtExpiration": 86400000,
       "whitelistPaths": ["/login/","/about/"]
     }</script>
@@ -35,55 +35,19 @@
         })();
         const accessControl = window.accessControl;
 
-        // 生成JWT令牌
-        function generateJWT(user, role, permissions) {
-            const header = {
-                alg: 'HS256',
-                typ: 'JWT'
-            };
-            
-            const payload = {
-                sub: user,
-                role: role,
-                permissions: permissions,
-                exp: Date.now() + accessControl.jwtExpiration,
-                iat: Date.now()
-            };
-            
-            // 简化版的JWT生成（实际应用中应使用更安全的实现）
-            const encodedHeader = btoa(JSON.stringify(header));
-            const encodedPayload = btoa(JSON.stringify(payload));
-            
-            // 简化的签名（仅用于演示，生产环境应使用更安全的方法）
-            const signature = btoa(`${encodedHeader}.${encodedPayload}.${accessControl.jwtSecret}`);
-            
-            return `${encodedHeader}.${encodedPayload}.${signature}`;
-        }
+        // 前端不再生成 JWT，改为后端签发；保留占位以兼容旧代码
+        function generateJWT() { return ''; }
 
-        // 验证JWT令牌
+        // 解码JWT令牌（前端仅用于展示和权限提示；实际鉴权由后端完成）
         function verifyJWT(token) {
             try {
                 const parts = token.split('.');
-                if (parts.length !== 3) {
-                    return null;
-                }
-                
+                if (parts.length !== 3) return null;
                 const payload = JSON.parse(atob(parts[1]));
-                
-                // 检查令牌是否过期
-                if (payload.exp < Date.now()) {
-                    return null;
-                }
-                
-                // 检查签名（简化版）
-                const expectedSignature = btoa(`${parts[0]}.${parts[1]}.${accessControl.jwtSecret}`);
-                if (parts[2] !== expectedSignature) {
-                    return null;
-                }
-                
+                if (payload.exp && payload.exp < Date.now()) return null;
                 return payload;
             } catch (e) {
-                console.error('JWT验证失败:', e);
+                console.error('JWT解码失败:', e);
                 return null;
             }
         }
@@ -128,28 +92,29 @@
             return false;
         }
 
-        // 设置访问权限
-        function setAccess(username, password) {
-            // 检查用户名密码
-            if (username && password) {
-                if (accessControl.users[username] && accessControl.users[username].password === password) {
-                    const user = accessControl.users[username];
-                    const token = generateJWT(username, user.role, user.permissions);
-                    localStorage.setItem('authToken', token);
-                    localStorage.setItem('currentUser', JSON.stringify({name: username, role: user.role}));
-                    return { success: true, role: user.role };
+        // 设置访问权限（改为后端签发JWT）
+        async function setAccess(username, password) {
+            try {
+                const body = username ? { username, password } : { accessKey: password };
+                const bases = ['/.netlify/functions', 'http://localhost:8888/.netlify/functions'];
+                let data = null; let ok = false; let lastError = '';
+                for (const b of bases) {
+                    try {
+                        const res = await fetch(`${b}/auth-login`, {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+                        });
+                        data = await res.json().catch(() => null);
+                        if (res.ok && data && data.token && data.user) { ok = true; break; }
+                        lastError = (data && data.error) || `HTTP ${res.status}`;
+                    } catch (err) { lastError = err.message; }
                 }
+                if (!ok || !data) return { success: false, error: lastError || '后端函数不可用' };
+                localStorage.setItem('authToken', data.token);
+                localStorage.setItem('currentUser', JSON.stringify({ name: data.user.name, role: data.user.role }));
+                return { success: true, role: data.user.role };
+            } catch (e) {
+                return { success: false, error: e.message || '网络错误，请重试' };
             }
-            
-            // 检查默认访问密钥
-            if (password === accessControl.defaultAccessKey) {
-                const token = generateJWT('default-user', accessControl.defaultRole, ['read']);
-                localStorage.setItem('authToken', token);
-                localStorage.setItem('currentUser', JSON.stringify({name: 'default-user', role: accessControl.defaultRole}));
-                return { success: true, role: accessControl.defaultRole };
-            }
-            
-            return { success: false, error: '用户名或密码错误' };
         }
 
         // 清除访问权限
@@ -260,12 +225,12 @@
             
             // 创建表单
             const form = document.createElement('form');
-            form.addEventListener('submit', function(event) {
+            form.addEventListener('submit', async function(event) {
                 event.preventDefault();
                 const username = document.getElementById('username').value;
                 const password = document.getElementById('password').value;
                 
-                const result = setAccess(username, password);
+                const result = await setAccess(username, password);
                 if (result.success) {
                     location.reload();
                 } else {
@@ -761,6 +726,8 @@
                         <option value="chapter">章节</option>
                         <option value="volume">分卷</option>
                         <option value="collection">小说集</option>
+                        <option value="discussion">讨论贴</option>
+                        <option value="image">图片</option>
                     </select>
                 </div>
                 
@@ -777,6 +744,32 @@
                 <div id="chapter-fields" style="margin-bottom: 15px;">
                     <label style="display: block; margin-bottom: 5px; color: var(--text-color);">章节标题</label>
                     <input type="text" id="chapter-title" style="width: 100%; padding: 10px; border: 1px solid var(--border-color); border-radius: 4px;">
+                </div>
+                
+                <div id="discussion-fields" style="margin-bottom: 15px; display: none;">
+                    <label style="display: block; margin-bottom: 5px; color: var(--text-color);">讨论标题</label>
+                    <input type="text" id="discussion-title" style="width: 100%; padding: 10px; border: 1px solid var(--border-color); border-radius: 4px;">
+                </div>
+                
+                <div id="image-fields" style="margin-bottom: 15px; display: none;">
+                    <label style="display: block; margin-bottom: 5px; color: var(--text-color);">图片上传</label>
+                    <div id="image-drop-zone" style="border: 2px dashed var(--border-color); border-radius: 6px; padding: 20px; text-align: center; color: var(--light-text); cursor: pointer;">
+                        拖拽图片到此或点击选择文件
+                        <input type="file" id="image-file" accept="image/*" style="display:none;" />
+                    </div>
+                    <div style="margin-top:10px; display:flex; gap:10px; align-items:center;">
+                        <input type="text" id="image-folder" placeholder="static/images 或子目录，如 static/images/covers" style="flex:1; padding: 10px; border: 1px solid var(--border-color); border-radius: 4px;">
+                        <button id="choose-image-btn" type="button" style="padding:8px 12px; border:1px solid var(--border-color); background:#f5f5f5; border-radius:4px; cursor:pointer;">选择图片</button>
+                    </div>
+                    <div id="image-preview-wrap" style="margin-top:10px; display:none;">
+                         <img id="image-preview" src="" alt="预览" style="max-width:100%; max-height:200px; border:1px solid var(--border-color); border-radius:4px;" />
+                     </div>
+                     <div style="margin-top:10px; display:flex; gap:10px; align-items:center;">
+                         <label style="display:flex; align-items:center; gap:6px; color: var(--text-color);"><input type="checkbox" id="compress-webp" checked /> 压缩为 WebP(质量 0.8)</label>
+                         <label style="display:flex; align-items:center; gap:6px; color: var(--text-color);"><input type="checkbox" id="keep-original" /> 保留原图</label>
+                         <button id="copy-image-url-btn" type="button" style="padding:6px 10px; border:1px solid var(--border-color); background:#f5f5f5; border-radius:4px; cursor:pointer; display:none;">复制图片链接</button>
+                     </div>
+                     <div id="image-progress" style="margin-top:8px; color: var(--light-text);">推荐使用 WebP 格式以降低体积</div>
                 </div>
                 
                 <div style="margin-bottom: 15px;">
@@ -814,6 +807,7 @@
             <input id="card-url" placeholder="卡片URL" style="padding: 8px; border: 1px solid var(--border-color); border-radius: 4px;">
             <input id="card-image" placeholder="卡片图片（可选）" style="padding: 8px; border: 1px solid var(--border-color); border-radius: 4px;">
             <button id="add-card" style="padding: 8px 10px; background: var(--primary-color); color: #fff; border: none; border-radius: 4px; cursor: pointer;">添加卡片</button>
+            <button id="open-discussion" style="padding: 8px 10px; background: #2980b9; color: #fff; border: none; border-radius: 4px; cursor: pointer;">本页讨论</button>
         </div>
         <div id="admin-action-status" style="margin-top: 8px; font-size: 0.9rem; color: var(--light-text);"></div>
     </div>
@@ -830,16 +824,38 @@
                 panel.style.display = 'block';
             }
             async function callUpdate(path, action, payload, message) {
-                try {
-                    const body = { repo: 'Silent-Tiga/my-private-novel', path, action, payload, message };
-                    const res = await fetch('/.netlify/functions/update-md', {
-                        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
-                    });
-                    const json = await res.json();
-                    if (!res.ok) throw new Error(json && json.error ? json.error : `HTTP ${res.status}`);
+                const jwt = (window.__ACCESS__ && window.__ACCESS__.jwt) || localStorage.getItem('jwt') || localStorage.getItem('authToken') || '';
+                const bases = ['/.netlify/functions', 'http://localhost:8888/.netlify/functions'];
+                let ok = false; let json = null; let lastError = '';
+                for (const b of bases) {
+                    try {
+                        const body = { repo: 'Silent-Tiga/my-private-novel', path, action, payload, message };
+                        const res = await fetch(`${b}/update-md`, {
+                            method: 'POST', headers: { 'Content-Type': 'application/json', ...(jwt ? { 'Authorization': `Bearer ${jwt}` } : {}) }, body: JSON.stringify(body)
+                        });
+                        const ct = res.headers.get('content-type') || '';
+                        if (ct.includes('application/json')) { json = await res.json(); }
+                        if (res.ok && json) { ok = true; break; }
+                        lastError = json && json.error ? json.error : `HTTP ${res.status}`;
+                    } catch(err) { lastError = err.message; }
+                }
+                if (ok) {
                     statusEl.textContent = '操作成功，Netlify 将自动重新构建。';
-                } catch(err) {
-                    statusEl.textContent = `操作失败：${err.message}`;
+                } else {
+                    let msg = '操作失败：';
+                    const err = lastError || '';
+                    if (/401|403|unauthorized|Insufficient permissions/i.test(err)) {
+                        msg += '权限不足，请登录或升级权限';
+                    } else if (/409|conflict/i.test(err)) {
+                        msg += '内容冲突，请刷新后重试';
+                    } else if (/5\d{2}/.test(err)) {
+                        msg += '服务器错误，请稍后重试';
+                    } else if (err) {
+                        msg += err;
+                    } else {
+                        msg += '后端函数不可用';
+                    }
+                    statusEl.textContent = msg;
                 }
             }
             document.getElementById('enable-comments').addEventListener('click', function(){
@@ -858,6 +874,21 @@
                 if (!title || !url) { statusEl.textContent = '请填写卡片标题与URL'; return; }
                 callUpdate(window.CURRENT_MD_PATH, 'set_cards', { cards: [{ title, url, image }] }, 'Add card');
             });
+            // 本页讨论一键入口：确保讨论条目存在，若不存在则创建并跳转
+            document.getElementById('open-discussion').addEventListener('click', async function(){
+                try {
+                    const baseSlugSrc = window.CURRENT_MD_PATH || window.location.pathname;
+                    const slug = slugify(baseSlugSrc || 'page');
+                    const mdPath = `content/forum/discussion/${slug}.md`;
+                    const title = `讨论：${document.title || slug}`;
+                    const payload = { frontmatter: { title, type: 'discussion', tags: ['页面'], related: window.CURRENT_MD_PATH || window.location.pathname, draft: false }, content: `本页（${baseSlugSrc}）的讨论入口。` };
+                    await callUpdate(mdPath, 'create_entry', payload, 'Ensure page discussion');
+                    const targetUrl = `/forum/discussion/${slug}/`;
+                    window.location.href = targetUrl;
+                } catch(e) {
+                    statusEl.textContent = `打开讨论失败：${e.message}`;
+                }
+            });
         });
     </script>
     <script>
@@ -873,7 +904,18 @@
             const collectionFields = document.getElementById('collection-fields');
             const volumeFields = document.getElementById('volume-fields');
             const chapterFields = document.getElementById('chapter-fields');
-            const uploadStatus = document.getElementById('upload-status');
+            const discussionFields = document.getElementById('discussion-fields');
+            const imageFields = document.getElementById('image-fields');
+            const imageFile = document.getElementById('image-file');
+            const imageFolder = document.getElementById('image-folder');
+            const imageDropZone = document.getElementById('image-drop-zone');
+            const imagePreviewWrap = document.getElementById('image-preview-wrap');
+            const imagePreview = document.getElementById('image-preview');
+            const imageProgress = document.getElementById('image-progress');
+             const compressWebp = document.getElementById('compress-webp');
+             const keepOriginal = document.getElementById('keep-original');
+             const copyImageUrlBtn = document.getElementById('copy-image-url-btn');
+             const uploadStatus = document.getElementById('upload-status');
             
             // 检查用户是否有写权限
             if (user && hasPermission('write')) {
@@ -884,9 +926,11 @@
             function toggleUploadFields() {
                 const type = uploadType.value;
                 
-                collectionFields.style.display = type === 'volume' || type === 'chapter' ? 'block' : 'none';
+                collectionFields.style.display = (type === 'volume' || type === 'chapter') ? 'block' : 'none';
                 volumeFields.style.display = type === 'chapter' ? 'block' : 'none';
                 chapterFields.style.display = type === 'chapter' ? 'block' : 'none';
+                discussionFields.style.display = type === 'discussion' ? 'block' : 'none';
+                imageFields.style.display = type === 'image' ? 'block' : 'none';
             }
             
             // 显示上传器
@@ -914,6 +958,51 @@
             // 监听上传类型变化
             uploadType.addEventListener('change', toggleUploadFields);
             
+            // 图片上传交互
+            document.getElementById('choose-image-btn').addEventListener('click', () => imageFile.click());
+            imageDropZone.addEventListener('click', () => imageFile.click());
+            imageDropZone.addEventListener('dragover', (e) => { e.preventDefault(); imageDropZone.style.borderColor = '#888'; });
+            imageDropZone.addEventListener('dragleave', () => { imageDropZone.style.borderColor = 'var(--border-color)'; });
+            function handleSelectedFile(file) {
+                 const reader = new FileReader();
+                 reader.onload = () => {
+                     const dataUrl = reader.result;
+                     imagePreview.src = dataUrl;
+                     imagePreviewWrap.style.display = 'block';
+                     const img = new Image();
+                     img.onload = () => {
+                         const sizeMB = (file.size/1024/1024).toFixed(2);
+                         imageProgress.textContent = `已选择：${file.name} ${img.naturalWidth}x${img.naturalHeight} (${sizeMB}MB)`;
+                     };
+                     img.src = dataUrl;
+                 };
+                 reader.readAsDataURL(file);
+             }
+             imageDropZone.addEventListener('drop', (e) => {
+                 e.preventDefault();
+                 imageDropZone.style.borderColor = 'var(--border-color)';
+                 if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                     imageFile.files = e.dataTransfer.files;
+                     handleSelectedFile(imageFile.files[0]);
+                 }
+             });
+             imageDropZone.addEventListener('paste', (e) => {
+                 const items = e.clipboardData && e.clipboardData.items;
+                 if (!items) return;
+                 for (const it of items) {
+                     if (it.type && it.type.startsWith('image/')) {
+                         const file = it.getAsFile();
+                         if (file) { imageFile.files = new DataTransfer().files; /* placeholder to keep state */ handleSelectedFile(file); }
+                         break;
+                     }
+                 }
+             });
+             imageFile.addEventListener('change', () => {
+                 const file = imageFile.files[0];
+                 if (!file) return;
+                 handleSelectedFile(file);
+             });
+            
             // 处理表单提交
             uploadForm.addEventListener('submit', function(e) {
                 e.preventDefault();
@@ -923,9 +1012,171 @@
                 const collectionName = document.getElementById('collection-name').value.trim();
                 const volumeName = document.getElementById('volume-name').value.trim();
                 const chapterTitle = document.getElementById('chapter-title').value.trim();
+                const discussionTitle = document.getElementById('discussion-title').value.trim();
                 const content = document.getElementById('content').value.trim();
                 const tags = document.getElementById('tags').value.trim();
                 const isDraft = document.getElementById('draft').checked;
+                
+                // 图片上传专用处理
+                if (type === 'image') {
+                     const file = imageFile && imageFile.files && imageFile.files[0];
+                     if (!file) {
+                         uploadStatus.innerHTML = '<span style="color: red;">请选择要上传的图片文件</span>';
+                         return;
+                     }
+                     if (file.size > 5 * 1024 * 1024) { // 5MB 限制
+                         uploadStatus.innerHTML = '<span style="color: red;">图片大小不能超过 5MB</span>';
+                         return;
+                     }
+                     const allowed = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+                     if (!allowed.includes(file.type)) {
+                         uploadStatus.innerHTML = '<span style="color: red;">仅支持 PNG/JPEG/WebP/GIF 格式图片</span>';
+                         return;
+                     }
+                     const folder = (imageFolder && imageFolder.value.trim()) || 'static/images';
+                     const submitBtn = uploadForm.querySelector('button[type="submit"]');
+                     submitBtn && (submitBtn.disabled = true);
+                     uploadStatus.innerHTML = '<span style="color: var(--primary-color);">正在上传图片...</span>';
+                     const reader = new FileReader();
+                     reader.onload = async () => {
+                         try {
+                             const dataUrl = reader.result;
+                             const jwt = localStorage.getItem('authToken');
+                             if (!jwt) {
+                                 uploadStatus.innerHTML = '<span style="color: red;">未登录或令牌缺失，请先登录后再上传图片</span>';
+                                 submitBtn && (submitBtn.disabled = false);
+                                 return;
+                             }
+                             // 统一重命名规则: timestamp-slug.ext
+                             const extFromType = (() => {
+                                 if (compressWebp.checked && (file.type === 'image/jpeg' || file.type === 'image/png')) return 'webp';
+                                 const map = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' };
+                                 return map[file.type] || 'png';
+                             })();
+                             const baseName = file.name.replace(/\.[^.]+$/, '');
+                             const nameSlug = (s => s.toLowerCase().trim().replace(/\s+/g,'-').replace(/[^\p{L}\p{N}\-]+/gu,'').replace(/-+/g,'-').replace(/^-+|-+$/g,''))(baseName) || ('untitled');
+                             const ts = new Date().toISOString().slice(0,19).replace(/[-:T]/g,'');
+                             const finalName = `${ts}-${nameSlug}.${extFromType}`;
+                             
+                             // 压缩为 WebP（仅 jpeg/png）
+                             async function prepareBlob() {
+                                 if (compressWebp.checked && (file.type === 'image/jpeg' || file.type === 'image/png')) {
+                                     const img = await new Promise((resolve) => { const i = new Image(); i.onload = () => resolve(i); i.src = dataUrl; });
+                                     const canvas = document.createElement('canvas');
+                                     canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
+                                     const ctx = canvas.getContext('2d');
+                                     ctx.drawImage(img, 0, 0);
+                                     const webpDataUrl = canvas.toDataURL('image/webp', 0.8);
+                                     const b64 = webpDataUrl.split(',')[1];
+                                     const res = await fetch(webpDataUrl);
+                                     const blob = await res.blob();
+                                     return { blob, base64: b64 };
+                                 } else {
+                                     const b64 = dataUrl.split(',')[1];
+                                     const res = await fetch(dataUrl);
+                                     const blob = await res.blob();
+                                     return { blob, base64: b64 };
+                                 }
+                             }
+                             async function sha256Hex(blob) {
+                                 const buf = await blob.arrayBuffer();
+                                 const digest = await crypto.subtle.digest('SHA-256', buf);
+                                 const view = new Uint8Array(digest);
+                                 return Array.from(view).map(b => b.toString(16).padStart(2,'0')).join('');
+                             }
+                             const prepared = await prepareBlob();
+                             const shaHex = await sha256Hex(prepared.blob);
+                             const body = {
+                                 file_base64: prepared.base64,
+                                 folder,
+                                 filename: finalName,
+                                 sha256: shaHex
+                             };
+                             const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${jwt}` };
+                             const bases = ['/.netlify/functions', 'http://localhost:8888/.netlify/functions'];
+                             let ok = false; let json = null; let lastError = '';
+                             for (const b of bases) {
+                                 try {
+                                     const res = await fetch(`${b}/upload-image`, {
+                                         method: 'POST',
+                                         headers,
+                                         body: JSON.stringify(body)
+                                     });
+                                     const ct = res.headers.get('content-type') || '';
+                                     if (ct.includes('application/json')) {
+                                         json = await res.json();
+                                     } else {
+                                         const text = await res.text();
+                                         json = { message: text };
+                                     }
+                                     if (res.ok && json) { ok = true; break; }
+                                     lastError = json && (json.error || json.message) ? (json.error || json.message) : `HTTP ${res.status}`;
+                                 } catch (e) { lastError = e.message; }
+                             }
+                             if (!ok) throw new Error(lastError || '后端函数不可用，请使用 netlify dev 本地运行或部署到 Netlify');
+                             const url = (json && json.url) ? json.url : (json && json.path ? ('/' + json.path.replace(/^static\//,'')) : '');
+                             if (url) {
+                                 const contentEl = document.getElementById('content');
+                                 contentEl.value = (contentEl.value || '') + `\n\n![](${url})\n`;
+                                 copyImageUrlBtn.style.display = 'inline-block';
+                                 copyImageUrlBtn.onclick = async () => {
+                                     try { await navigator.clipboard.writeText(url); imageProgress.textContent = '已复制图片链接到剪贴板'; } catch(_) {}
+                                 };
+                                 imageProgress.textContent = `上传成功：${url}`;
+                             } else {
+                                 imageProgress.textContent = '上传完成，可在仓库 static/images 查看。';
+                             }
+                             // 保留原图（仅当已压缩且选择保留原图）
+                             if (compressWebp && keepOriginal && compressWebp.checked && keepOriginal.checked && (file.type === 'image/jpeg' || file.type === 'image/png')) {
+                                 try {
+                                     const originalB64 = dataUrl.split(',')[1];
+                                     const resOrig = await fetch(dataUrl);
+                                     const originalBlob = await resOrig.blob();
+                                     let originalSha = '';
+                                     {
+                                         const buf = await originalBlob.arrayBuffer();
+                                         const digest = await crypto.subtle.digest('SHA-256', buf);
+                                         const view = new Uint8Array(digest);
+                                         originalSha = Array.from(view).map(b => b.toString(16).padStart(2,'0')).join('');
+                                     }
+                                     const origExt = file.type === 'image/jpeg' ? 'jpg' : 'png';
+                                     const origName = `${ts}-${nameSlug}.${origExt}`;
+                                     const body2 = { file_base64: originalB64, folder, filename: origName, sha256: originalSha };
+                                     const bases2 = ['/.netlify/functions', 'http://localhost:8888/.netlify/functions'];
+                                     let ok2 = false; let json2 = null; let lastError2 = '';
+                                     for (const b2 of bases2) {
+                                         try {
+                                             const res2 = await fetch(`${b2}/upload-image`, { method: 'POST', headers, body: JSON.stringify(body2) });
+                                             const ct2 = res2.headers.get('content-type') || '';
+                                             if (ct2.includes('application/json')) json2 = await res2.json(); else { const t2 = await res2.text(); json2 = { message: t2 }; }
+                                             if (res2.ok && json2) { ok2 = true; break; }
+                                             lastError2 = json2 && (json2.error || json2.message) ? (json2.error || json2.message) : `HTTP ${res2.status}`;
+                                         } catch (e2) { lastError2 = e2.message; }
+                                     }
+                                     if (ok2) {
+                                         const url2 = (json2 && json2.url) ? json2.url : (json2 && json2.path ? ('/' + json2.path.replace(/^static\//,'')) : '');
+                                         if (url2) {
+                                             const contentEl = document.getElementById('content');
+                                             contentEl.value = (contentEl.value || '') + `\n原图：${url2}\n`;
+                                         }
+                                     } else {
+                                         console.warn('保留原图上传失败', lastError2);
+                                     }
+                                 } catch (e) {
+                                     console.warn('保留原图异常', e);
+                                 }
+                             }
+                             uploadStatus.innerHTML = '<span style="color: green;">图片上传成功</span>';
+                             submitBtn && (submitBtn.disabled = false);
+                             // 图片成功后不自动关闭模态，方便继续编辑内容
+                         } catch (err) {
+                             uploadStatus.innerHTML = `<span style="color: red;">上传失败：${err.message}</span>`;
+                             submitBtn && (submitBtn.disabled = false);
+                         }
+                     };
+                     reader.readAsDataURL(file);
+                     return; // 不继续执行文本内容保存逻辑
+                 }
                 
                 // 表单验证
                 if (type === 'chapter' && (!collectionName || !volumeName || !chapterTitle || !content)) {
@@ -943,6 +1194,11 @@
                     return;
                 }
                 
+                if (type === 'discussion' && (!discussionTitle || !content)) {
+                    uploadStatus.innerHTML = '<span style="color: red;">请填写讨论标题和内容</span>';
+                    return;
+                }
+                
                 // 显示保存状态
                 uploadStatus.innerHTML = '<span style="color: var(--primary-color);">保存中...</span>';
                 
@@ -950,7 +1206,14 @@
                 (async () => {
                     try {
                         const repo = 'Silent-Tiga/my-private-novel';
-                        const slugify = (s) => s.toLowerCase().trim().replace(/\s+/g, '-').replace(/[^a-z0-9\-]/g, '');
+                        const slugify = (s) => {
+                            const base = s.toLowerCase().trim()
+                                .replace(/\s+/g, '-')
+                                .replace(/[^\p{L}\p{N}\-]+/gu, '')
+                                .replace(/-+/g, '-')
+                                .replace(/^-+|-+$/g, '');
+                            return base || ('untitled-' + Date.now());
+                        };
                         const base = 'content/novel-collections';
                         let targetPath = '';
                         let title = '';
@@ -960,15 +1223,20 @@
                         } else if (type === 'volume') {
                             title = volumeName;
                             targetPath = `${base}/${slugify(collectionName)}/${slugify(volumeName)}/_index.md`;
-                        } else {
+                        } else if (type === 'chapter') {
                             title = chapterTitle;
                             targetPath = `${base}/${slugify(collectionName)}/${slugify(volumeName)}/${slugify(chapterTitle)}.md`;
+                        } else if (type === 'discussion') {
+                            title = discussionTitle;
+                            const dateSlug = new Date().toISOString().slice(0,19).replace(/[-:T]/g,'');
+                            targetPath = `content/forum/${dateSlug}-${slugify(discussionTitle)}.md`;
                         }
                         const fm = {
                             title,
                             draft: !!isDraft,
                             date: new Date().toISOString(),
-                            tags: tags ? tags.split(',').map(t => t.trim()).filter(Boolean) : []
+                            tags: tags ? tags.split(',').map(t => t.trim()).filter(Boolean) : [],
+                            type: type
                         };
                         const body = {
                             repo,
@@ -980,13 +1248,25 @@
                             content,
                             message: `Create ${type}: ${title}`
                         };
-                        const res = await fetch('/.netlify/functions/update-md', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(body)
-                        });
-                        const json = await res.json();
-                        if (!res.ok) throw new Error(json && json.error ? json.error : `HTTP ${res.status}`);
+                        const jwt = (window.__ACCESS__ && window.__ACCESS__.jwt) || localStorage.getItem('jwt') || '';
+                        const bases = ['/.netlify/functions', 'http://localhost:8888/.netlify/functions'];
+                        let ok = false; let json = null; let lastError = '';
+                        for (const b of bases) {
+                            try {
+                                const res = await fetch(`${b}/update-md`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json', ...(jwt ? { 'Authorization': `Bearer ${jwt}` } : {}) },
+                                    body: JSON.stringify(body)
+                                });
+                                const ct = res.headers.get('content-type') || '';
+                                if (ct.includes('application/json')) {
+                                    json = await res.json();
+                                }
+                                if (res.ok && json) { ok = true; break; }
+                                lastError = json && json.error ? json.error : `HTTP ${res.status}`;
+                            } catch (e) { lastError = e.message; }
+                        }
+                        if (!ok) throw new Error(lastError || '后端函数不可用，请使用 netlify dev 本地运行或部署到 Netlify');
                         uploadStatus.innerHTML = '<span style="color: green;">保存成功，Netlify 将自动重新构建。</span>';
                         setTimeout(function() {
                             modal.style.display = 'none';
@@ -1015,11 +1295,8 @@
   window.CF_MEDIA_BASE = window.CF_MEDIA_BASE || 'https://your-worker-subdomain.workers.dev';
   function getAuthJWTForMedia() {
     try {
-      if (typeof generateJWT !== 'function') return '';
-      const user = (typeof getCurrentUser === 'function') ? getCurrentUser() : null;
-      if (!user) return '';
-      // 使用现有的 generateJWT(userId, role, permissions) 生成令牌
-      return generateJWT(user.sub || user.name || 'anonymous', user.role || 'reader', ['read']);
+      const token = localStorage.getItem('authToken') || '';
+      return token;
     } catch(e) { return ''; }
   }
   function cfMediaUrl(key) {

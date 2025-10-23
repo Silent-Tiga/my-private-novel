@@ -19,7 +19,7 @@ main = "cloudflare-r2-media.js"
 compatibility_date = "2024-08-01"
 
 [vars]
-JWT_SECRET = "your-secret-key-123456" # 与前端 baseof.html 中 accessControl.jwtSecret 保持一致
+JWT_SECRET = "<your-strong-secret>" # 与 Netlify Functions 的 JWT_SECRET 保持一致（前端不持有密钥）
 
 [[r2_buckets]]
 bucket_name = "my-private-media"
@@ -48,7 +48,7 @@ wrangler deploy
 
 你需要修改：
 - 将 `window.CF_MEDIA_BASE` 从默认值改为你的 Worker 域名
-- 确保前端的 `accessControl.jwtSecret` 与 `wrangler.toml` 的 `JWT_SECRET` 一致（为了让简化 JWT 能被 Worker 验证）
+- 确保 Netlify Functions 环境变量 `JWT_SECRET` 与 `wrangler.toml` 的 `JWT_SECRET` 一致（Worker 使用该密钥校验后端签发的 JWT）
 
 ## 使用方法（在讨论区）
 - 在帖子内容中写入 `cf://路径/文件名.ext`（例如 `cf://images/banner.jpg` 或 `cf://video/clip.mp4`）

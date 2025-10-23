@@ -80,6 +80,33 @@ exports.handler = async function(event) {
     if (!token) {
       return { statusCode: 500, body: JSON.stringify({ error: 'Missing GITHUB_TOKEN env' }) };
     }
+    // 简易 JWT 校验（与前端同算法）
+    const jwtSecret = process.env.JWT_SECRET;
+    if (!jwtSecret) {
+      return { statusCode: 500, body: JSON.stringify({ error: 'Missing JWT_SECRET env' }) };
+    }
+    const authHeader = event.headers.authorization || event.headers.Authorization || '';
+    if (!authHeader.startsWith('Bearer ')) {
+      return { statusCode: 401, body: JSON.stringify({ error: 'Missing bearer token' }) };
+    }
+    const t = authHeader.slice('Bearer '.length);
+    try {
+      const parts = t.split('.');
+      if (parts.length === 3) {
+        const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf-8'));
+        const expectedSig = Buffer.from(`${parts[0]}.${parts[1]}.${jwtSecret}`).toString('base64');
+        if (expectedSig !== parts[2]) throw new Error('Invalid signature');
+        if (payload.exp && payload.exp < Date.now()) throw new Error('Token expired');
+        // 需要写权限
+        const perms = payload.permissions || [];
+        const hasWrite = Array.isArray(perms) && perms.includes('write');
+        if (!hasWrite) return { statusCode: 403, body: JSON.stringify({ error: 'Insufficient permissions' }) };
+      } else {
+        throw new Error('Malformed token');
+      }
+    } catch(e) {
+      return { statusCode: 401, body: JSON.stringify({ error: 'Unauthorized: ' + e.message }) };
+    }
     const payload = JSON.parse(event.body || '{}');
     const repoFull = payload.repo || process.env.REPO_FULL_NAME || 'Silent-Tiga/my-private-novel';
     const [owner, repo] = repoFull.split('/');
@@ -90,15 +117,20 @@ exports.handler = async function(event) {
       return { statusCode: 400, body: JSON.stringify({ error: 'Missing path or action' }) };
     }
 
-    // Create entry if requested and file missing
+    // Create or ensure entry
     let file = await getFile({ owner, repo, path, token });
-    if (!file && action === 'create_entry') {
-      const fm = Object.assign({ title: payload.title || '新条目', date: new Date().toISOString(), draft: !!payload.draft }, payload.frontmatter || {});
-      const front = buildFrontMatter(fm);
-      const body = (payload.content || '').trim();
-      const newContent = `${front}\n\n${body}\n`;
-      await putFile({ owner, repo, path, token, content: newContent, sha: undefined, message: payload.message || `Create ${path}` });
-      return { statusCode: 200, body: JSON.stringify({ ok: true, created: true }) };
+    if (action === 'create_entry') {
+      if (!file) {
+        const fm = Object.assign({ title: payload.title || '新条目', date: new Date().toISOString(), draft: !!payload.draft }, payload.frontmatter || {});
+        const front = buildFrontMatter(fm);
+        const body = (payload.content || '').trim();
+        const newContent = `${front}\n\n${body}\n`;
+        await putFile({ owner, repo, path, token, content: newContent, sha: undefined, message: payload.message || `Create ${path}` });
+        return { statusCode: 200, body: JSON.stringify({ ok: true, created: true }) };
+      } else {
+        // already exists, treat as ensured
+        return { statusCode: 200, body: JSON.stringify({ ok: true, created: false, exists: true }) };
+      }
     }
 
     if (!file) {

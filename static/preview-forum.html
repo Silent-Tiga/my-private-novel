@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>论坛预览 - 管理员快捷操作 & 讨论列表</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; padding: 24px; background:#f7f7fa; color:#222; }
+    h1 { margin: 0 0 16px; }
+    .panel { position: fixed; right: 24px; bottom: 24px; }
+    .panel .btn { display:block; margin:8px 0; padding:10px 14px; border:none; border-radius:20px; color:#fff; cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,.15); }
+    .btn-open { background:#27ae60; }
+    .btn-close { background:#c0392b; }
+    .btn-add { background:#3498db; }
+    .btn-discuss { background:#2980b9; }
+    .list { max-width: 860px; margin: 0 auto; padding-bottom: 120px; }
+    .thread-item { background:#fff; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,.08); padding:16px; margin-bottom:12px; }
+    .thread-item h3 { margin:0 0 8px; font-size:18px; }
+    .meta { font-size:12px; color:#777; }
+    .filter { display:flex; gap:8px; align-items:center; margin:16px 0; }
+    .filter input { flex:1; padding:8px 10px; border:1px solid #ddd; border-radius:6px; }
+    .filter button { padding:8px 12px; }
+    .no-threads-tip { color:#888; margin-top: 12px; }
+  </style>
+</head>
+<body>
+  <h1>论坛预览</h1>
+  <p>此页面用于快速预览“本页讨论”按钮与标签过滤逻辑的视觉效果。</p>
+
+  <div class="list">
+    <div class="filter">
+      <input id="filter-tag" placeholder="输入标签关键字进行过滤..." />
+      <button id="filter-btn">过滤</button>
+    </div>
+    <div id="threads-container">
+      <div class="thread-item" data-tags="科幻, 小说"><h3>星际旅人</h3><div class="meta">2025-10-20 · 标签：科幻, 小说</div><p>关于主角穿越星际的想法讨论。</p></div>
+      <div class="thread-item" data-tags="悬疑, 推理"><h3>午夜谜案</h3><div class="meta">2025-10-19 · 标签：悬疑, 推理</div><p>凶案线索的合理性分析。</p></div>
+      <div class="thread-item" data-tags="随笔"><h3>写作心情</h3><div class="meta">2025-10-18 · 标签：随笔</div><p>谈谈写作过程中遇到的趣事。</p></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <button class="btn btn-open">开启评论</button>
+    <button class="btn btn-close">关闭评论</button>
+    <button class="btn btn-add">添加卡片</button>
+    <button id="open-discussion" class="btn btn-discuss">本页讨论</button>
+  </div>
+
+  <script>
+    function renderThreads() {
+      const container = document.getElementById('threads-container');
+      const filter = (document.getElementById('filter-tag').value || '').trim().toLowerCase();
+      const items = Array.from(container.querySelectorAll('.thread-item'));
+      let visibleCount = 0;
+      items.forEach(el => {
+        const tags = (el.getAttribute('data-tags') || '').toLowerCase();
+        const show = !filter || (tags && tags.includes(filter));
+        el.style.display = show ? 'block' : 'none';
+        if (show) visibleCount++;
+      });
+      if (!visibleCount) {
+        if (!container.querySelector('.no-threads-tip')) {
+          const tip = document.createElement('div');
+          tip.className = 'no-threads-tip';
+          tip.textContent = '目前没有匹配的讨论贴。';
+          container.appendChild(tip);
+        }
+      } else {
+        const tip = container.querySelector('.no-threads-tip');
+        if (tip) tip.remove();
+      }
+    }
+
+    document.getElementById('filter-btn').addEventListener('click', renderThreads);
+
+    // 仅预览：点击“本页讨论”跳转到示例URL
+    document.getElementById('open-discussion').addEventListener('click', () => {
+      const slug = 'preview-slug';
+      const url = `/forum/discussion/${slug}/`;
+      alert(`将跳转到: ${url}`);
+    });
+  </script>
+</body>
+</html>

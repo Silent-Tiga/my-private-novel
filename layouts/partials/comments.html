@@ -79,20 +79,47 @@
     }
 
     // 加载评论
-    function loadComments() {
+    async function loadComments() {
         // 显示加载状态
         commentsContainer.innerHTML = '<div class="comment-loading">加载评论中...</div>';
         noComments.style.display = 'none';
         commentsPagination.innerHTML = '';
-        
-        // 模拟加载延迟
-        setTimeout(() => {
-            // 从本地存储获取评论
-            const comments = getCommentsFromStorage(commentConfig.postId);
-            
-            // 显示评论
-            displayComments(comments);
-        }, 500);
+        try {
+            const postId = commentConfig.postId;
+            const resp = await fetch('/.netlify/functions/save-comment?post_id=' + encodeURIComponent(postId));
+            const data = await resp.json();
+            const items = Array.isArray(data.items) ? data.items : [];
+    
+            // 归一化为旧结构（根评论 + 嵌套 replies）
+            const byId = new Map();
+            items.forEach(item => {
+                byId.set(item.id, {
+                    id: item.id,
+                    author: item.author,
+                    content: item.content,
+                    date: item.createdAt || item.date,
+                    likes: item.upvotes || item.likes || 0,
+                    replies: []
+                });
+            });
+            items.forEach(item => {
+                if (item.parentId && byId.has(item.parentId) && byId.has(item.id)) {
+                    const parent = byId.get(item.parentId);
+                    parent.replies.push({
+                        id: item.id,
+                        author: item.author,
+                        to: parent.author,
+                        content: item.content,
+                        date: item.createdAt || item.date
+                    });
+                }
+            });
+            const roots = items.filter(i => !i.parentId).map(i => byId.get(i.id)).filter(Boolean);
+            displayComments(roots);
+        } catch (e) {
+            commentsContainer.innerHTML = '<div class="comment-loading">评论加载失败</div>';
+            console.error('加载评论失败:', e);
+        }
     }
 
     // 显示评论
@@ -236,100 +263,57 @@
     // 处理评论提交
     function handleCommentSubmit(event) {
         event.preventDefault();
-        
-        // 检查是否正在提交
-        if (commentConfig.isSubmitting) {
-            return;
-        }
-        
-        // 获取表单数据
+        if (commentConfig.isSubmitting) return;
         const author = commentAuthor.value.trim();
         const content = commentContent.value.trim();
         const email = commentEmail.value.trim();
-        
-        // 表单验证
         if (!author || !content) {
             showSubmitStatus('请填写昵称和评论内容', 'error');
             return;
         }
-        
-        // 设置提交状态
         commentConfig.isSubmitting = true;
         showSubmitStatus('提交中...', 'loading');
-        
-        // 模拟提交延迟
-        setTimeout(() => {
-            // 创建评论对象
-            const comment = {
-                id: generateCommentId(),
-                author: author,
-                email: email,
-                content: content,
-                date: new Date().toISOString(),
-                likes: 0,
-                replies: []
-            };
-            
-            // 保存评论
-            saveComment(commentConfig.postId, comment);
-            
-            // 重置表单
-            commentForm.reset();
-            
-            // 重新加载评论
-            loadComments();
-            
-            // 显示成功状态
-            showSubmitStatus('评论提交成功！', 'success');
-            
-            // 重置提交状态
-            setTimeout(() => {
+        (async () => {
+            try {
+                const jwt = localStorage.getItem('authToken') || '';
+                const body = { action:'add', post_id: commentConfig.postId, comment: { author, content, parentId: null }, message: `add comment to ${commentConfig.postId}` };
+                const res = await fetch('/.netlify/functions/save-comment', { method: 'POST', headers: { 'Content-Type':'application/json', ...(jwt? { 'Authorization': `Bearer ${jwt}` } : {}) }, body: JSON.stringify(body) });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data && data.error || `HTTP ${res.status}`);
+                commentForm.reset();
+                await loadComments();
+                showSubmitStatus('评论提交成功！', 'success');
+                setTimeout(() => { commentConfig.isSubmitting = false; commentSubmitStatus.innerHTML = ''; }, 2000);
+            } catch(err) {
+                showSubmitStatus(`提交失败：${err.message}`, 'error');
                 commentConfig.isSubmitting = false;
-                commentSubmitStatus.innerHTML = '';
-            }, 2000);
-        }, 1000);
+            }
+        })();
     }
 
     // 处理回复提交
     function handleReplySubmit(event) {
         event.preventDefault();
-        
         const replyForm = event.currentTarget;
         const commentId = replyForm.dataset.id;
         const replyContent = replyForm.querySelector('.reply-content').value.trim();
         const authorName = commentAuthor.value.trim() || '匿名用户';
-        
-        // 验证回复内容
-        if (!replyContent) {
-            alert('请输入回复内容');
-            return;
-        }
-        
-        // 获取目标评论的作者
-        const commentElement = document.querySelector(`.comment-item[data-id="${commentId}"]`);
-        const targetAuthor = commentElement.querySelector('.comment-author-name').textContent;
-        
-        // 创建回复对象
-        const reply = {
-            id: generateCommentId(),
-            author: authorName,
-            to: targetAuthor,
-            content: replyContent,
-            date: new Date().toISOString()
-        };
-        
-        // 保存回复
-        saveReply(commentConfig.postId, commentId, reply);
-        
-        // 隐藏回复表单
-        const replyFormContainer = document.getElementById(`reply-form-${commentId}`);
-        replyFormContainer.style.display = 'none';
-        
-        // 重置回复表单
-        replyForm.reset();
-        
-        // 重新加载评论
-        loadComments();
+        if (!replyContent) { alert('请输入回复内容'); return; }
+        (async () => {
+            try {
+                const jwt = localStorage.getItem('authToken') || '';
+                const body = { action:'add', post_id: commentConfig.postId, comment: { author: authorName, content: replyContent, parentId: commentId }, message: `reply to ${commentId} on ${commentConfig.postId}` };
+                const res = await fetch('/.netlify/functions/save-comment', { method: 'POST', headers: { 'Content-Type':'application/json', ...(jwt? { 'Authorization': `Bearer ${jwt}` } : {}) }, body: JSON.stringify(body) });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data && data.error || `HTTP ${res.status}`);
+                const replyFormContainer = document.getElementById(`reply-form-${commentId}`);
+                replyFormContainer.style.display = 'none';
+                replyForm.reset();
+                await loadComments();
+            } catch(err) {
+                alert(`回复失败：${err.message}`);
+            }
+        })();
     }
 
     // 切换回复表单显示
@@ -467,30 +451,34 @@
         }
     }
 
-    // 切换评论点赞
+    // 切换评论点赞（改为后端持久化）
     function toggleCommentLike(postId, commentId) {
-        try {
-            const comments = getCommentsFromStorage(postId);
-            const commentIndex = comments.findIndex(c => c.id === commentId);
-            
-            if (commentIndex !== -1) {
-                comments[commentIndex].likes = (comments[commentIndex].likes || 0) + 1;
-                localStorage.setItem(`comments_${postId}`, JSON.stringify(comments));
+        (async () => {
+            try {
+                const jwt = localStorage.getItem('authToken') || '';
+                const body = { action:'upvote', post_id: postId, commentId, message: `upvote ${commentId} on ${postId}` };
+                const res = await fetch('/.netlify/functions/save-comment', { method: 'POST', headers: { 'Content-Type':'application/json', ...(jwt? { 'Authorization': `Bearer ${jwt}` } : {}) }, body: JSON.stringify(body) });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data && data.error || `HTTP ${res.status}`);
+            } catch(err) {
+                console.error('点赞失败:', err);
             }
-        } catch (error) {
-            console.error('点赞失败:', error);
-        }
+        })();
     }
 
-    // 删除评论
+    // 删除评论（改为后端持久化）
     function deleteComment(postId, commentId) {
-        try {
-            const comments = getCommentsFromStorage(postId);
-            const filteredComments = comments.filter(c => c.id !== commentId);
-            localStorage.setItem(`comments_${postId}`, JSON.stringify(filteredComments));
-        } catch (error) {
-            console.error('删除评论失败:', error);
-        }
+        (async () => {
+            try {
+                const jwt = localStorage.getItem('authToken') || '';
+                const body = { action:'delete', post_id: postId, commentId, message: `delete ${commentId} on ${postId}` };
+                const res = await fetch('/.netlify/functions/save-comment', { method: 'POST', headers: { 'Content-Type':'application/json', ...(jwt? { 'Authorization': `Bearer ${jwt}` } : {}) }, body: JSON.stringify(body) });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data && data.error || `HTTP ${res.status}`);
+            } catch(err) {
+                console.error('删除评论失败:', err);
+            }
+        })();
     }
 
     // 生成评论ID
@@ -587,6 +575,7 @@
         border-radius: 8px;
         padding: 2rem;
         margin-top: 2rem;
+        border-top: 1px solid var(--border-color);
         box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
     }
     

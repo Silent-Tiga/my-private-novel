@@ -1,5 +1,5 @@
 {{ define "main" }}
-<div class="forum-page" style="max-width: 900px; margin: 0 auto;">
+<div class="forum-page" style="max-width: 920px; margin: 2rem auto; border-top: 1px solid var(--border-color); padding-top: 1rem;">
   <h1 style="margin-bottom: 1rem;">讨论区</h1>
   <p style="color: var(--light-text); margin-bottom: 1.5rem;">发布与浏览讨论贴</p>
 
@@ -39,7 +39,21 @@
       <button id="apply-filter" style="padding:8px 12px; margin-left:6px; border:1px solid var(--border-color); border-radius:4px; cursor:pointer;">过滤</button>
     </div>
   </div>
-  <div id="threads-container"></div>
+  <div id="threads-container">
+    {{ $pages := where .Site.RegularPages "Params.type" "discussion" }}
+    {{ $pages = sort $pages "Date" "desc" }}
+    {{ range $pages }}
+      <div class="thread-item" data-tags="{{ with .Params.tags }}{{ delimit . "," }}{{ end }}" style="border:1px solid var(--border-color); border-radius:8px; padding:12px; margin-bottom:12px;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div>
+            <a href="{{ .RelPermalink }}" style="font-weight:600; color:var(--primary-color); text-decoration:none;">{{ .Title }}</a>
+            <div style="color:var(--light-text); font-size:0.85rem;">{{ .Date.Format "2006-01-02" }} · {{ with .Params.tags }}{{ delimit . ", " }}{{ end }}</div>
+          </div>
+        </div>
+        <div style="margin-top:8px; color:var(--text-color)">{{ .Summary }}</div>
+      </div>
+    {{ end }}
+  </div>
 </div>
 
 <script>
@@ -47,8 +61,7 @@
 
   function hasWritePermission() {
     try {
-      const user = getCurrentUser();
-      return !!(user && (typeof hasPermission === 'function') && hasPermission(user, 'write'));
+      return !!((typeof hasPermission === 'function') && hasPermission('write'));
     } catch (e) {
       return false;
     }
@@ -74,23 +87,28 @@
 
   function renderThreads() {
     const container = document.getElementById('threads-container');
-    container.innerHTML = '';
 
     const filter = (document.getElementById('filter-tag').value || '').trim().toLowerCase();
-
-    let threads = loadThreads();
-    threads.sort((a,b) => new Date(b.date) - new Date(a.date));
-
-    if (filter) {
-      threads = threads.filter(t => (t.tags || []).some(tag => tag.toLowerCase().includes(filter)));
+    const items = Array.from(container.querySelectorAll('.thread-item'));
+    let visibleCount = 0;
+    items.forEach(el => {
+      const tags = (el.getAttribute('data-tags') || '').toLowerCase();
+      const show = !filter || (tags && tags.includes(filter));
+      el.style.display = show ? 'block' : 'none';
+      if (show) visibleCount++;
+    });
+    if (!visibleCount) {
+      if (!container.querySelector('.no-threads-tip')) {
+        const tip = document.createElement('div');
+        tip.className = 'no-threads-tip';
+        tip.style.color = 'var(--light-text)';
+        tip.textContent = '目前没有匹配的讨论贴。';
+        container.appendChild(tip);
+      }
+    } else {
+      const tip = container.querySelector('.no-threads-tip');
+      if (tip) tip.remove();
     }
-
-    if (!threads.length) {
-      container.innerHTML = '<div style="color:var(--light-text);">目前还没有讨论贴，快来发布第一条吧！</div>';
-      return;
-    }
-
-    threads.forEach(t => container.appendChild(threadItem(t)));
   }
 
   function threadItem(thread) {
@@ -337,7 +355,7 @@
 
       const form = document.getElementById('thread-form');
       const status = document.getElementById('thread-submit-status');
-      form.addEventListener('submit', function(e) {
+      form.addEventListener('submit', async function(e) {
         e.preventDefault();
         const user = getCurrentUserSafe();
         if (!user) return alert('请先登录');
@@ -348,24 +366,30 @@
         if (!title || !content) { status.textContent = '请填写标题和内容'; return; }
 
         status.textContent = '发布中...';
-        setTimeout(() => {
-          const threads = loadThreads();
-          threads.push({
-            id: genId(),
-            title,
-            content,
-            tags,
-            author: user.sub || '匿名',
-            date: new Date().toISOString(),
-            likes: 0,
-            replies: []
-          });
-          saveThreads(threads);
+        try {
+          const jwt = localStorage.getItem('authToken') || '';
+          const slugBase = title.toLowerCase().replace(/[^a-z0-9_\-]+/g, '-').replace(/-+/g,'-');
+          const mdPath = `content/forum/discussion/${slugBase}.md`;
+          const payload = { frontmatter: { title, type: 'discussion', tags, draft: false }, content };
+          const body = { repo: 'Silent-Tiga/my-private-novel', path: mdPath, action: 'create_entry', payload, message: `Create discussion: ${title}` };
+          const bases = ['/.netlify/functions', 'http://localhost:8888/.netlify/functions'];
+          let ok = false; let lastError = ''; let json = null;
+          for (const b of bases) {
+            try {
+              const res = await fetch(`${b}/update-md`, { method:'POST', headers: { 'Content-Type':'application/json', ...(jwt? { 'Authorization': `Bearer ${jwt}` } : {}) }, body: JSON.stringify(body) });
+              const ct = res.headers.get('content-type') || ''; if (ct.includes('application/json')) json = await res.json();
+              if (res.ok && json) { ok = true; break; }
+              lastError = json && json.error ? json.error : `HTTP ${res.status}`;
+            } catch(err) { lastError = err.message; }
+          }
+          if (!ok) { status.textContent = `发布失败：${lastError}`; return; }
           form.reset();
           status.textContent = '发布成功！';
-          renderThreads();
-          setTimeout(() => status.textContent = '', 1500);
-        }, 600);
+          // 跳转到新讨论贴页面
+          window.location.href = `/forum/discussion/${slugBase}/`;
+        } catch(err) {
+          status.textContent = `发布失败：${err.message}`;
+        }
       });
     } else {
       formContainer.style.display = 'none';
