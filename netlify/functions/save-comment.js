@@ -3,7 +3,7 @@
 //  - GET  : /.netlify/functions/save-comment?post_id=<id> (public read)
 //  - POST : { action?, post_id, comment:{author, content, parentId?, id?}, message? } (requires 'comment' or 'write')
 
-const fetch = require('node-fetch');
+
 
 function json(status, data) {
   return { statusCode: status, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) };

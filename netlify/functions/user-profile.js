@@ -4,7 +4,7 @@
 //  - POST : { nickname } to set/update nickname
 // Auth: Authorization: Bearer <jwt> (any authenticated user)
 
-const fetch = require('node-fetch');
+
 
 function json(status, data) {
   return { statusCode: status, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) };
