@@ -1,5 +1,6 @@
 [build]
-  command = "hugo"
+  # Ensure git submodules (themes) are fetched before building
+  command = "git submodule update --init --recursive && hugo"
   publish = "public"
   functions = "netlify/functions"
 
