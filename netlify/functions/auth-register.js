@@ -199,7 +199,6 @@ exports.handler = async (event) => {
     }
 
     // 签发令牌
-    const JWT_SECRET = process.env.JWT_SECRET;
     const EXP_MS = Number(process.env.JWT_EXP_MS || 86400000);
     const payload = { sub, role, permissions, iat: now, exp: now + EXP_MS };
     const token = signJWT(payload, JWT_SECRET);

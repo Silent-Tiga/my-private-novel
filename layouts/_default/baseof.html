@@ -970,9 +970,10 @@
         <div id="admin-action-status" style="margin-top: 8px; font-size: 0.9rem; color: var(--light-text);"></div>
         <textarea id="invite-output" readonly style="display:none; margin-top: 8px; width: 100%; height: 120px; padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; font-family: monospace;" placeholder="生成的邀请码将显示在此，按行分隔"></textarea>
     </div>
+    <div id="current-md-path" data-path="{{ with .File }}{{ .Path }}{{ else }}{{ "" }}{{ end }}" style="display:none;"></div>
     <script>
         // 当前页面对应的 Markdown 路径（如果可用）
-        window.CURRENT_MD_PATH = "{{ with .File }}{{ .Path }}{{ else }}{{ "" }}{{ end }}";
+        window.CURRENT_MD_PATH = document.getElementById('current-md-path')?.dataset.path || "";
         
         // 管理员快捷操作逻辑
         document.addEventListener('DOMContentLoaded', function() {
