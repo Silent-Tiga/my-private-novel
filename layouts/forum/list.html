@@ -67,6 +67,14 @@
     }
   }
 
+  function hasPostPermission() {
+    try {
+      return !!((typeof hasPermission === 'function') && (hasPermission('comment') || hasPermission('write')));
+    } catch (e) {
+      return false;
+    }
+  }
+
   function getCurrentUserSafe() {
     try { return getCurrentUser && getCurrentUser(); } catch(e) { return null; }
   }
@@ -349,7 +357,7 @@
     const formContainer = document.getElementById('thread-form-container');
     const tip = document.getElementById('thread-permission-tip');
 
-    if (hasWritePermission()) {
+    if (hasPostPermission()) {
       formContainer.style.display = 'block';
       tip.style.display = 'none';
 
@@ -385,7 +393,6 @@
           if (!ok) { status.textContent = `发布失败：${lastError}`; return; }
           form.reset();
           status.textContent = '发布成功！';
-          // 跳转到新讨论贴页面
           window.location.href = `/forum/discussion/${slugBase}/`;
         } catch(err) {
           status.textContent = `发布失败：${err.message}`;

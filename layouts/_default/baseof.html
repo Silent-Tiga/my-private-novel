@@ -139,28 +139,55 @@
             if (!user) {
                 return;
             }
-            
-            // 创建用户信息区域
             const userInfo = document.createElement('div');
-            userInfo.className = 'user-info';
             userInfo.style.position = 'fixed';
-            userInfo.style.top = '10px';
-            userInfo.style.right = '10px';
-            userInfo.style.padding = '8px 12px';
+            userInfo.style.top = '16px';
+            userInfo.style.right = '16px';
+            userInfo.style.padding = '10px 12px';
             userInfo.style.backgroundColor = 'var(--card-bg-color, #f9f9f9)';
             userInfo.style.borderRadius = '4px';
             userInfo.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.1)';
             userInfo.style.display = 'flex';
             userInfo.style.alignItems = 'center';
             userInfo.style.gap = '8px';
-            
-            // 用户角色
+
             const roleSpan = document.createElement('span');
             roleSpan.textContent = `角色: ${user.role}`;
             roleSpan.style.color = 'var(--text-color, #333)';
             roleSpan.style.fontSize = '0.875rem';
-            
-            // 登出按钮
+
+            const nicknameSpan = document.createElement('span');
+            nicknameSpan.textContent = '昵称: (加载中)';
+            nicknameSpan.style.color = 'var(--text-color, #333)';
+            nicknameSpan.style.fontSize = '0.875rem';
+
+            const editNickBtn = document.createElement('button');
+            editNickBtn.textContent = '改昵称';
+            editNickBtn.style.padding = '4px 8px';
+            editNickBtn.style.backgroundColor = '#3498db';
+            editNickBtn.style.color = 'white';
+            editNickBtn.style.border = 'none';
+            editNickBtn.style.borderRadius = '4px';
+            editNickBtn.style.fontSize = '0.75rem';
+            editNickBtn.style.cursor = 'pointer';
+            editNickBtn.addEventListener('click', async function() {
+                const nn = prompt('输入新的昵称（不超过64字符）');
+                if (!nn) return;
+                const jwt = localStorage.getItem('authToken');
+                if (!jwt) return;
+                try {
+                    const res = await fetch('/.netlify/functions/user-profile', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${jwt}` }, body: JSON.stringify({ nickname: nn })
+                    });
+                    const data = await res.json().catch(() => null);
+                    if (res.ok && data && data.nickname) {
+                        nicknameSpan.textContent = `昵称: ${data.nickname}`;
+                    } else {
+                        alert((data && data.error) || '昵称设置失败');
+                    }
+                } catch (e) { alert(e.message || '网络错误'); }
+            });
+
             const logoutButton = document.createElement('button');
             logoutButton.textContent = '登出';
             logoutButton.style.padding = '4px 8px';
@@ -170,18 +197,35 @@
             logoutButton.style.borderRadius = '4px';
             logoutButton.style.fontSize = '0.75rem';
             logoutButton.style.cursor = 'pointer';
-            
-            logoutButton.addEventListener('click', function() {
-                clearAccess();
-                location.reload();
-            });
-            
-            // 组装用户信息
+            logoutButton.addEventListener('click', function() { clearAccess(); location.reload(); });
+
             userInfo.appendChild(roleSpan);
+            userInfo.appendChild(nicknameSpan);
+            userInfo.appendChild(editNickBtn);
             userInfo.appendChild(logoutButton);
-            
-            // 添加到页面
             document.body.appendChild(userInfo);
+
+            // 加载昵称
+            (async function(){
+                const jwt = localStorage.getItem('authToken');
+                if (!jwt) { nicknameSpan.textContent = '昵称: (未登录)'; return; }
+                try {
+                    const bases = ['/.netlify/functions', 'http://localhost:8888/.netlify/functions'];
+                    let ok = false; let data = null;
+                    for (const b of bases) {
+                        try {
+                            const res = await fetch(`${b}/user-profile`, { method: 'GET', headers: { 'Authorization': `Bearer ${jwt}` } });
+                            const json = await res.json().catch(() => null);
+                            if (res.ok && json) { ok = true; data = json; break; }
+                        } catch (_) {}
+                    }
+                    if (ok && data && typeof data.nickname === 'string') {
+                        nicknameSpan.textContent = `昵称: ${data.nickname || '(未设置)'}`;
+                    } else {
+                        nicknameSpan.textContent = '昵称: (未设置)';
+                    }
+                } catch (_) { nicknameSpan.textContent = '昵称: (加载失败)'; }
+            })();
         }
 
         // 创建登录表单
@@ -291,7 +335,7 @@
             const passwordInput = document.createElement('input');
             passwordInput.type = 'password';
             passwordInput.id = 'password';
-            passwordInput.placeholder = '请输入访问密码';
+            passwordInput.placeholder = '请输入访问密钥或密码';
             passwordInput.style.width = '100%';
             passwordInput.style.padding = '0.75rem';
             passwordInput.style.border = '1px solid #ddd';
@@ -341,6 +385,111 @@
                 submitButton.style.backgroundColor = '#3a7bd5';
             });
             
+            // 切换：登录 / 注册（邀请码）
+            const switchContainer = document.createElement('div');
+            switchContainer.style.display = 'flex';
+            switchContainer.style.justifyContent = 'center';
+            switchContainer.style.gap = '12px';
+            switchContainer.style.marginBottom = '1rem';
+
+            const btnLogin = document.createElement('button');
+            btnLogin.type = 'button';
+            btnLogin.textContent = '登录';
+            btnLogin.style.padding = '6px 12px';
+            btnLogin.style.border = '1px solid #3a7bd5';
+            btnLogin.style.backgroundColor = '#3a7bd5';
+            btnLogin.style.color = 'white';
+            btnLogin.style.borderRadius = '4px';
+
+            const btnRegister = document.createElement('button');
+            btnRegister.type = 'button';
+            btnRegister.textContent = '注册（邀请码）';
+            btnRegister.style.padding = '6px 12px';
+            btnRegister.style.border = '1px solid #ddd';
+            btnRegister.style.backgroundColor = 'white';
+            btnRegister.style.color = '#333';
+            btnRegister.style.borderRadius = '4px';
+
+            switchContainer.appendChild(btnLogin);
+            switchContainer.appendChild(btnRegister);
+
+            // 注册表单（邀请码）
+            const regForm = document.createElement('form');
+            regForm.style.display = 'none';
+            regForm.addEventListener('submit', async function(event) {
+                event.preventDefault();
+                const invite = document.getElementById('inviteCode').value.trim();
+                const regUser = document.getElementById('regUsername').value.trim();
+                const regPass = document.getElementById('regPassword').value;
+                const nick = document.getElementById('regNickname').value.trim();
+                if (!invite || !regUser || !regPass) {
+                    document.getElementById('errorMessage').textContent = '请填写邀请码、用户名与密码';
+                    return;
+                }
+                const bases = ['/.netlify/functions', 'http://localhost:8888/.netlify/functions'];
+                let data = null; let ok = false; let lastError = '';
+                for (const b of bases) {
+                    try {
+                        const res = await fetch(`${b}/auth-register`, {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ inviteCode: invite, username: regUser, password: regPass, nickname: nick })
+                        });
+                        data = await res.json().catch(() => null);
+                        if (res.ok && data && data.token && data.user) { ok = true; break; }
+                        lastError = (data && data.error) || `HTTP ${res.status}`;
+                    } catch (err) { lastError = err.message; }
+                }
+                if (!ok || !data) {
+                    document.getElementById('errorMessage').textContent = lastError || '注册失败';
+                    return;
+                }
+                localStorage.setItem('authToken', data.token);
+                localStorage.setItem('currentUser', JSON.stringify({ name: data.user.name, role: data.user.role }));
+                location.reload();
+            });
+
+            const inviteInput = document.createElement('input');
+            inviteInput.type = 'text'; inviteInput.id = 'inviteCode'; inviteInput.placeholder = '邀请码';
+            inviteInput.style.width = '100%'; inviteInput.style.padding = '0.75rem'; inviteInput.style.border = '1px solid #ddd'; inviteInput.style.borderRadius = '4px'; inviteInput.style.marginBottom = '1rem';
+
+            const regUsernameInput = document.createElement('input');
+            regUsernameInput.type = 'text'; regUsernameInput.id = 'regUsername'; regUsernameInput.placeholder = '设置用户名';
+            regUsernameInput.style.width = '100%'; regUsernameInput.style.padding = '0.75rem'; regUsernameInput.style.border = '1px solid #ddd'; regUsernameInput.style.borderRadius = '4px'; regUsernameInput.style.marginBottom = '1rem';
+
+            const regPasswordInput = document.createElement('input');
+            regPasswordInput.type = 'password'; regPasswordInput.id = 'regPassword'; regPasswordInput.placeholder = '设置密码';
+            regPasswordInput.style.width = '100%'; regPasswordInput.style.padding = '0.75rem'; regPasswordInput.style.border = '1px solid #ddd'; regPasswordInput.style.borderRadius = '4px'; regPasswordInput.style.marginBottom = '1rem';
+
+            const regNicknameInput = document.createElement('input');
+            regNicknameInput.type = 'text'; regNicknameInput.id = 'regNickname'; regNicknameInput.placeholder = '设置昵称（可选）';
+            regNicknameInput.style.width = '100%'; regNicknameInput.style.padding = '0.75rem'; regNicknameInput.style.border = '1px solid #ddd'; regNicknameInput.style.borderRadius = '4px'; regNicknameInput.style.marginBottom = '1rem';
+
+            const regSubmit = document.createElement('button'); regSubmit.type = 'submit'; regSubmit.textContent = '注册并登录';
+            regSubmit.style.width = '100%'; regSubmit.style.padding = '0.75rem'; regSubmit.style.backgroundColor = '#3a7bd5'; regSubmit.style.color = 'white'; regSubmit.style.border = 'none'; regSubmit.style.borderRadius = '4px'; regSubmit.style.fontSize = '1rem'; regSubmit.style.cursor = 'pointer';
+
+            regForm.appendChild(inviteInput);
+            regForm.appendChild(regUsernameInput);
+            regForm.appendChild(regPasswordInput);
+            regForm.appendChild(regNicknameInput);
+            regForm.appendChild(regSubmit);
+
+            // 切换逻辑
+            btnLogin.addEventListener('click', function(){
+                form.style.display = 'block';
+                regForm.style.display = 'none';
+                btnLogin.style.backgroundColor = '#3a7bd5'; btnLogin.style.color = 'white';
+                btnRegister.style.backgroundColor = 'white'; btnRegister.style.color = '#333';
+            });
+            btnRegister.addEventListener('click', function(){
+                form.style.display = 'none';
+                regForm.style.display = 'block';
+                btnRegister.style.backgroundColor = '#3a7bd5'; btnRegister.style.color = 'white';
+                btnLogin.style.backgroundColor = 'white'; btnLogin.style.color = '#333';
+            });
+
+            // 默认显示登录
+            form.style.display = 'block';
+            regForm.style.display = 'none';
+            
             // 组装表单
             form.appendChild(usernameContainer);
             form.appendChild(passwordContainer);
@@ -350,7 +499,9 @@
             // 组装登录容器
             loginContainer.appendChild(title);
             loginContainer.appendChild(description);
+            loginContainer.appendChild(switchContainer);
             loginContainer.appendChild(form);
+            loginContainer.appendChild(regForm);
             
             // 添加到页面
             document.body.appendChild(loginContainer);
@@ -808,8 +959,16 @@
             <input id="card-image" placeholder="卡片图片（可选）" style="padding: 8px; border: 1px solid var(--border-color); border-radius: 4px;">
             <button id="add-card" style="padding: 8px 10px; background: var(--primary-color); color: #fff; border: none; border-radius: 4px; cursor: pointer;">添加卡片</button>
             <button id="open-discussion" style="padding: 8px 10px; background: #2980b9; color: #fff; border: none; border-radius: 4px; cursor: pointer;">本页讨论</button>
+            <!-- 批量生成邀请码（管理员） -->
+            <input id="invite-count" type="number" min="1" max="500" placeholder="数量(默认10)" style="padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; width: 120px;">
+            <input id="invite-days" type="number" min="1" max="3650" placeholder="有效天数(默认30)" style="padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; width: 140px;">
+            <input id="invite-role" placeholder="角色(默认reader)" style="padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; width: 150px;">
+            <input id="invite-perms" placeholder='权限JSON(默认["read"])' style="padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; width: 180px;">
+            <input id="invite-assigned" placeholder="绑定ID(可选)" style="padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; width: 150px;">
+            <button id="generate-invites" style="padding: 8px 10px; background: #8e44ad; color: #fff; border: none; border-radius: 4px; cursor: pointer;">批量生成邀请码</button>
         </div>
         <div id="admin-action-status" style="margin-top: 8px; font-size: 0.9rem; color: var(--light-text);"></div>
+        <textarea id="invite-output" readonly style="display:none; margin-top: 8px; width: 100%; height: 120px; padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; font-family: monospace;" placeholder="生成的邀请码将显示在此，按行分隔"></textarea>
     </div>
     <script>
         // 当前页面对应的 Markdown 路径（如果可用）
@@ -822,6 +981,8 @@
             const statusEl = document.getElementById('admin-action-status');
             if (user && hasPermission('write')) {
                 panel.style.display = 'block';
+                const adminControls = ['invite-count','invite-days','invite-role','invite-perms','invite-assigned','generate-invites','invite-output'];
+                if (!hasPermission('admin')) { adminControls.forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'none'; }); }
             }
             async function callUpdate(path, action, payload, message) {
                 const jwt = (window.__ACCESS__ && window.__ACCESS__.jwt) || localStorage.getItem('jwt') || localStorage.getItem('authToken') || '';
@@ -889,6 +1050,47 @@
                     statusEl.textContent = `打开讨论失败：${e.message}`;
                 }
             });
+            // 批量生成邀请码
+            const genBtn = document.getElementById('generate-invites');
+            if (genBtn) {
+                genBtn.addEventListener('click', async function() {
+                    const jwt = (window.__ACCESS__ && window.__ACCESS__.jwt) || localStorage.getItem('jwt') || localStorage.getItem('authToken') || '';
+                    if (!jwt) { alert('请先登录'); return; }
+                    const count = Number(document.getElementById('invite-count').value || '');
+                    const expDays = Number(document.getElementById('invite-days').value || '');
+                    const role = (document.getElementById('invite-role').value || '').trim();
+                    const permsStr = (document.getElementById('invite-perms').value || '').trim();
+                    const assignedId = (document.getElementById('invite-assigned').value || '').trim();
+                    let permissions = null;
+                    if (permsStr) {
+                        try { permissions = JSON.parse(permsStr); if (!Array.isArray(permissions)) throw new Error('权限必须是数组'); }
+                        catch (e) { alert('权限JSON不合法'); return; }
+                    }
+                    const payload = {};
+                    if (count) payload.count = Math.max(1, Math.min(500, count));
+                    if (expDays) payload.expDays = Math.max(1, Math.min(3650, expDays));
+                    if (role) payload.role = role;
+                    if (permissions) payload.permissions = permissions;
+                    if (assignedId) payload.assignedId = assignedId;
+                    const bases = ['/.netlify/functions', 'http://localhost:8888/.netlify/functions'];
+                    let ok = false; let data = null; let lastError = '';
+                    for (const b of bases) {
+                        try {
+                            const res = await fetch(`${b}/admin-create-invites`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${jwt}` }, body: JSON.stringify(payload) });
+                            const ct = res.headers.get('content-type') || '';
+                            const json = ct.includes('application/json') ? await res.json() : null;
+                            if (res.ok && json) { ok = true; data = json; break; }
+                            lastError = (json && json.error) || `HTTP ${res.status}`;
+                        } catch (e) { lastError = e.message || '网络错误'; }
+                    }
+                    if (!ok) { statusEl.textContent = `生成失败：${lastError}`; return; }
+                    statusEl.textContent = `已生成 ${data.count} 条邀请码`;
+                    const output = document.getElementById('invite-output');
+                    const lines = (data.items || []).map(it => it.code).join('\n');
+                    output.value = lines;
+                    output.style.display = 'block';
+                });
+            }
         });
     </script>
     <script>

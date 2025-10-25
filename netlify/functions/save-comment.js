@@ -1,12 +1,24 @@
-// Netlify Function: Save and List comments under data/comments/<postId>.json
+// Netlify Function: Save and List comments via LeanCloud
 // Methods:
 //  - GET  : /.netlify/functions/save-comment?post_id=<id> (public read)
 //  - POST : { action?, post_id, comment:{author, content, parentId?, id?}, message? } (requires 'comment' or 'write')
 
-const githubApi = 'https://api.github.com';
+const fetch = require('node-fetch');
 
 function json(status, data) {
   return { statusCode: status, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) };
+}
+
+function safePostId(id) {
+  if (typeof id !== 'string' || !id.trim()) throw Object.assign(new Error('Missing post_id'), { code: 400 });
+  const s = id.trim();
+  if (s.includes('..')) throw Object.assign(new Error('Invalid post_id'), { code: 400 });
+  const safe = s.replace(/[^A-Za-z0-9_\/-]/g, '-');
+  return safe;
+}
+
+function escapeContent(s) {
+  return String(s).replace(/[&<>"]+/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
 }
 
 function verifyJWT(event, { requireAnyOf = ['comment', 'write'] } = {}) {
@@ -28,59 +40,79 @@ function verifyJWT(event, { requireAnyOf = ['comment', 'write'] } = {}) {
   return payload;
 }
 
-function safePostId(id) {
-  if (typeof id !== 'string' || !id.trim()) throw Object.assign(new Error('Missing post_id'), { code: 400 });
-  const s = id.trim();
-  if (s.includes('..')) throw Object.assign(new Error('Invalid post_id'), { code: 400 });
-  const safe = s.replace(/[^A-Za-z0-9_\/-]/g, '-');
-  return safe;
+function lcConfig() {
+  const APP_ID = process.env.LEANCLOUD_APP_ID;
+  const APP_KEY = process.env.LEANCLOUD_APP_KEY;
+  const MASTER_KEY = process.env.LEANCLOUD_MASTER_KEY || '';
+  const SERVER_URL = process.env.LEANCLOUD_SERVER_URL; // e.g., https://<appId>.api.lncldglobal.com
+  const USE_MASTER_FOR_WRITE = (process.env.LEANCLOUD_USE_MASTER_FOR_WRITE || 'false').toLowerCase() === 'true';
+  if (!APP_ID || !SERVER_URL || (!APP_KEY && !MASTER_KEY)) throw Object.assign(new Error('Missing LeanCloud env: LEANCLOUD_APP_ID/APP_KEY(or MASTER)/SERVER_URL'), { code: 500 });
+  return { APP_ID, APP_KEY, MASTER_KEY, SERVER_URL, USE_MASTER_FOR_WRITE };
 }
 
-function escapeContent(s) {
-  return String(s).replace(/[&<>"]+/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
-}
-
-async function getFile({ owner, repo, path, token, branch }) {
-  const url = `${githubApi}/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}${branch ? `?ref=${encodeURIComponent(branch)}` : ''}`;
-  const res = await fetch(url, { headers: { Authorization: `token ${token}`, Accept: 'application/vnd.github.v3+json' } });
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`GitHub GET failed: ${res.status}`);
-  const json = await res.json();
-  const content = Buffer.from(json.content, 'base64').toString('utf-8');
-  return { sha: json.sha, content };
-}
-
-async function putFile({ owner, repo, path, token, content, sha, message, branch }) {
-  const url = `${githubApi}/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`;
-  const body = {
-    message: message || `Update ${path}`,
-    content: Buffer.from(content, 'utf-8').toString('base64'),
-    sha,
-    branch: branch || undefined
+async function lcRequest(path, { method = 'GET', body = null, query = null, useMaster = false } = {}) {
+  const { APP_ID, APP_KEY, MASTER_KEY, SERVER_URL } = lcConfig();
+  const url = new URL(`${SERVER_URL.replace(/\/$/, '')}${path}`);
+  if (query) Object.entries(query).forEach(([k,v]) => url.searchParams.set(k, typeof v === 'string' ? v : JSON.stringify(v)));
+  const headers = {
+    'X-LC-Id': APP_ID,
+    'X-LC-Key': useMaster && MASTER_KEY ? `${MASTER_KEY},master` : APP_KEY,
+    'Content-Type': 'application/json'
   };
-  const res = await fetch(url, { method: 'PUT', headers: { Authorization: `token ${token}`, Accept: 'application/vnd.github.v3+json' }, body: JSON.stringify(body) });
-  if (!res.ok) throw new Error(`GitHub PUT failed: ${res.status}`);
-  return res.json();
+  const res = await fetch(url.toString(), { method, headers, body: body ? JSON.stringify(body) : null });
+  const ct = res.headers.get('content-type') || '';
+  const data = ct.includes('application/json') ? await res.json() : await res.text();
+  if (!res.ok) throw new Error(`LeanCloud ${method} ${path} failed: ${res.status} ${typeof data === 'string' ? data : (data.error || '')}`);
+  return data;
+}
+
+async function listComments(postId) {
+  const where = { postId };
+  const data = await lcRequest('/1.1/classes/Comment', { method: 'GET', query: { where, order: '-createdAt', limit: 1000 } });
+  const results = Array.isArray(data.results) ? data.results : [];
+  return results.map(obj => ({
+    id: obj.objectId,
+    parentId: obj.parentId || null,
+    author: obj.author || '匿名',
+    content: obj.content || '',
+    createdAt: obj.createdAt || new Date().toISOString(),
+    upvotes: obj.upvotes || 0
+  }));
+}
+
+async function addComment({ postId, author, content, parentId }) {
+  const body = {
+    postId,
+    author,
+    content,
+    parentId: parentId || null,
+    upvotes: 0
+  };
+  const { USE_MASTER_FOR_WRITE } = lcConfig();
+  const data = await lcRequest('/1.1/classes/Comment', { method: 'POST', body, useMaster: USE_MASTER_FOR_WRITE });
+  return data; // includes objectId, createdAt
+}
+
+async function upvoteComment({ id }) {
+  const body = { upvotes: { __op: 'Increment', amount: 1 } };
+  const { USE_MASTER_FOR_WRITE } = lcConfig();
+  const data = await lcRequest(`/1.1/classes/Comment/${encodeURIComponent(id)}`, { method: 'PUT', body, useMaster: USE_MASTER_FOR_WRITE });
+  return data;
+}
+
+async function deleteCommentLC({ id }) {
+  await lcRequest(`/1.1/classes/Comment/${encodeURIComponent(id)}`, { method: 'DELETE', useMaster: true });
+  return { ok: true };
 }
 
 exports.handler = async function(event) {
   try {
-    const token = process.env.GITHUB_TOKEN;
-    if (!token) return json(500, { error: 'Missing GITHUB_TOKEN env' });
-    const branch = process.env.GITHUB_BRANCH || 'main';
-
     if (event.httpMethod === 'GET') {
       const qs = event.queryStringParameters || {};
       const postId = safePostId(qs.post_id || '');
-      const repoFull = process.env.REPO_FULL_NAME || 'Silent-Tiga/my-private-novel';
-      const [owner, repo] = repoFull.split('/');
-      const path = `data/comments/${postId}.json`;
-      const file = await getFile({ owner, repo, path, token, branch });
-      if (!file) return json(200, { postId, items: [] });
-      let obj;
-      try { obj = JSON.parse(file.content); } catch(e) { obj = { postId, items: [] }; }
-      if (!Array.isArray(obj.items)) obj.items = [];
-      return json(200, { postId, items: obj.items });
+      const items = await listComments(postId);
+      // Normalize into expected shape for frontend partial (roots + replies derived client-side)
+      return json(200, { postId, items });
     }
 
     if (event.httpMethod !== 'POST') return json(405, { error: 'Method Not Allowed' });
@@ -95,14 +127,6 @@ exports.handler = async function(event) {
     } catch(e) { return json(e.code || 401, { error: e.message }); }
 
     const postId = safePostId(payload.post_id || '');
-    const repoFull = payload.repo || process.env.REPO_FULL_NAME || 'Silent-Tiga/my-private-novel';
-    const [owner, repo] = repoFull.split('/');
-    const path = `data/comments/${postId}.json`;
-
-    const file = await getFile({ owner, repo, path, token, branch });
-    let obj = file ? (() => { try { return JSON.parse(file.content); } catch(e) { return null; } })() : null;
-    if (!obj || typeof obj !== 'object') obj = { postId, items: [] };
-    if (!Array.isArray(obj.items)) obj.items = [];
 
     if (action === 'add') {
       const comment = payload.comment || {};
@@ -110,42 +134,25 @@ exports.handler = async function(event) {
       const content = escapeContent((comment.content || '').trim());
       const parentId = (comment.parentId || '') || null;
       if (!author || !content) return json(400, { error: 'author and content required' });
-
-      // basic anti-spam: refuse duplicate author+content in 60s
-      const last = obj.items.length ? obj.items[obj.items.length - 1] : null;
-      if (last && last.author === author && last.content === content) {
-        const lastTs = Date.parse(last.createdAt || 0) || 0;
-        if (Date.now() - lastTs < 60 * 1000) return json(429, { error: 'Duplicate comment in 60s window' });
-      }
-
-      const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2,8)}`;
-      const createdAt = new Date().toISOString();
-      obj.items.push({ id, parentId, author, content, createdAt, upvotes: 0 });
-      const pretty = JSON.stringify(obj, null, 2);
-      await putFile({ owner, repo, path, token, content: pretty, sha: file ? file.sha : undefined, message: payload.message || `add comment to ${postId}`, branch });
-      return json(200, { ok: true, action, count: obj.items.length, items: obj.items });
+      const created = await addComment({ postId, author, content, parentId });
+      const items = await listComments(postId);
+      return json(200, { ok: true, action, count: items.length, items });
     }
 
     if (action === 'upvote') {
       const commentId = (payload.comment && payload.comment.id) || payload.commentId || '';
       if (!commentId) return json(400, { error: 'comment id required' });
-      const target = obj.items.find(it => it.id === commentId);
-      if (!target) return json(404, { error: 'comment not found' });
-      target.upvotes = (target.upvotes || 0) + 1;
-      const pretty = JSON.stringify(obj, null, 2);
-      await putFile({ owner, repo, path, token, content: pretty, sha: file ? file.sha : undefined, message: payload.message || `upvote comment ${commentId} on ${postId}`, branch });
-      return json(200, { ok: true, action, items: obj.items });
+      await upvoteComment({ id: commentId });
+      const items = await listComments(postId);
+      return json(200, { ok: true, action, items });
     }
 
     if (action === 'delete') {
       const commentId = (payload.comment && payload.comment.id) || payload.commentId || '';
       if (!commentId) return json(400, { error: 'comment id required' });
-      const before = obj.items.length;
-      obj.items = obj.items.filter(it => it.id !== commentId);
-      if (obj.items.length === before) return json(404, { error: 'comment not found' });
-      const pretty = JSON.stringify(obj, null, 2);
-      await putFile({ owner, repo, path, token, content: pretty, sha: file ? file.sha : undefined, message: payload.message || `delete comment ${commentId} on ${postId}`, branch });
-      return json(200, { ok: true, action, items: obj.items });
+      await deleteCommentLC({ id: commentId });
+      const items = await listComments(postId);
+      return json(200, { ok: true, action, items });
     }
 
     return json(400, { error: `Unsupported action: ${action}` });

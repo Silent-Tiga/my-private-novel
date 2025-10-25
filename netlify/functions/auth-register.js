@@ -1,5 +1,7 @@
-// Netlify Function: auth-login
-// Issues backend-signed JWT. Validates username/password or default access key.
+// Netlify Function: auth-register (invite-based one-time registration)
+// Method: POST
+// Body: { inviteCode, username, password, nickname? }
+// Returns: { token, user } on success
 
 const crypto = require('crypto');
 const fetch = require('node-fetch');
@@ -8,27 +10,17 @@ function json(status, data) {
   return { statusCode: status, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) };
 }
 
-function sha256Hex(s) {
-  return crypto.createHash('sha256').update(s).digest('hex');
-}
-
-function timingSafeEqualHex(a, b) {
-  try {
-    const A = Buffer.from(a, 'hex');
-    const B = Buffer.from(b, 'hex');
-    if (A.length !== B.length) return false;
-    return crypto.timingSafeEqual(A, B);
-  } catch (e) { return false; }
-}
+function sha256Hex(s) { return crypto.createHash('sha256').update(s).digest('hex'); }
 
 function signJWT(payload, secret) {
-  // Simplified JWT compatible with existing functions
   const header = { alg: 'HS256', typ: 'JWT' };
   const encodedHeader = Buffer.from(JSON.stringify(header)).toString('base64');
   const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64');
   const signature = Buffer.from(`${encodedHeader}.${encodedPayload}.${secret}`).toString('base64');
   return `${encodedHeader}.${encodedPayload}.${signature}`;
 }
+
+function safeParseJSON(s, fallback) { try { return JSON.parse(s); } catch { return fallback; } }
 
 function lcConfig() {
   return {
@@ -118,6 +110,7 @@ async function rateLimitReset(ip, action, rec) {
     }
   } catch (_) { /* ignore */ }
 }
+
 exports.handler = async (event) => {
   try {
     if (event.httpMethod !== 'POST') return json(405, { error: 'Method Not Allowed' });
@@ -125,97 +118,95 @@ exports.handler = async (event) => {
     const JWT_SECRET = process.env.JWT_SECRET;
     if (!JWT_SECRET) return json(500, { error: 'Missing JWT_SECRET env' });
 
-  // IP限流预检
-  const ip = getClientIp(event);
-  const rl = await rateLimitCheck(ip, 'login');
-  if (rl.blocked) {
-    const retrySec = Math.ceil((rl.retryAfterMs || 0) / 1000);
-    return { statusCode: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': String(retrySec) }, body: JSON.stringify({ error: '尝试过多，请稍后再试', retryAfterSec: retrySec }) };
-  }
-    const body = JSON.parse(event.body || '{}');
-    const { username = '', password = '', accessKey = '', inviteCode = '' } = body;
+    // IP限流预检（注册防刷）
+    const ip = getClientIp(event);
+    const rl = await rateLimitCheck(ip, 'register');
+    if (rl.blocked) {
+      const retrySec = Math.ceil((rl.retryAfterMs || 0) / 1000);
+      return { statusCode: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': String(retrySec) }, body: JSON.stringify({ error: '尝试过多，请稍后再试', retryAfterSec: retrySec }) };
+    }
 
-    const USERS_JSON = process.env.USERS_JSON || '{}'; // optional: {"admin":{"passwordHash":"<sha256>","role":"admin","permissions":["read","write","delete","admin"]}}
-    const users = safeParseJSON(USERS_JSON, {});
+    const body = JSON.parse(event.body || '{}');
+    const { inviteCode = '', username = '', password = '', nickname = '' } = body;
 
     const PASS_SALT = process.env.PASS_SALT || '';
-    const ACCESS_SALT = process.env.ACCESS_SALT || PASS_SALT;
-    const DEFAULT_ACCESS_KEY_HASH = process.env.DEFAULT_ACCESS_KEY_HASH || '';
-    const INVITE_SALT = process.env.INVITE_SALT || ACCESS_SALT;
-    const INVITES_JSON = process.env.INVITES_JSON || '{}';
-    const invites = safeParseJSON(INVITES_JSON, {});
+    const INVITE_SALT = process.env.INVITE_SALT || PASS_SALT;
 
-    const EXP_MS = Number(process.env.JWT_EXP_MS || 86400000);
+    if (!inviteCode || !username || !password) {
+      await rateLimitOnFailure(ip, 'register', rl.rec, rl.windowMs, rl.lockMs);
+      return json(400, { error: 'Missing inviteCode/username/password' });
+    }
+
+    // 校验邀请码（LeanCloud InviteCodes）
+    let inviteRec = null;
+    try {
+      const where = encodeURIComponent(JSON.stringify({ codeHash: sha256Hex(INVITE_SALT + inviteCode) }));
+      const found = await lcRequest('GET', `/1.1/classes/InviteCodes?where=${where}`, null, { useMaster: true });
+      inviteRec = Array.isArray(found && found.results) && found.results[0];
+    } catch (e) {
+      await rateLimitOnFailure(ip, 'register', rl.rec, rl.windowMs, rl.lockMs);
+      return json(500, { error: 'Invite lookup failed' });
+    }
+
+    if (!inviteRec) {
+      await rateLimitOnFailure(ip, 'register', rl.rec, rl.windowMs, rl.lockMs);
+      return json(401, { error: 'Invalid invite' });
+    }
+
     const now = Date.now();
+    const expTs = Number(inviteRec.expTs || 0);
+    if (expTs && expTs <= now) {
+      await rateLimitOnFailure(ip, 'register', rl.rec, rl.windowMs, rl.lockMs);
+      return json(401, { error: 'Invite expired' });
+    }
 
-    let userOut = null;
+    if (inviteRec.usedBy) {
+      await rateLimitOnFailure(ip, 'register', rl.rec, rl.windowMs, rl.lockMs);
+      return json(409, { error: 'Invite already used' });
+    }
 
-    // Username/password flow
-    if (username && password) {
-      // Try LeanCloud UserAccount first
-      try {
-        const where = encodeURIComponent(JSON.stringify({ username }));
-        const found = await lcRequest('GET', `/1.1/classes/UserAccount?where=${where}`, null, { useMaster: true });
-        const obj = Array.isArray(found && found.results) && found.results[0];
-        if (obj && obj.passwordHash) {
-          const submitted = sha256Hex(PASS_SALT + password);
-          const expected = obj.passwordHash;
-          if (timingSafeEqualHex(submitted, expected)) {
-            const role = obj.role || 'reader';
-            const perms = Array.isArray(obj.permissions) ? obj.permissions : ['read'];
-            const sub = obj.sub || username;
-            userOut = { name: sub, role, permissions: perms };
-          }
-        }
-      } catch (_) {
-        // Fallback to USERS_JSON
-        const u = users[username];
-        if (u) {
-          const submitted = sha256Hex(PASS_SALT + password);
-          const expected = u.passwordHash || sha256Hex(PASS_SALT + (u.password || ''));
-          if (timingSafeEqualHex(submitted, expected)) {
-            userOut = { name: username, role: u.role || 'reader', permissions: Array.isArray(u.permissions) ? u.permissions : ['read'] };
-          }
-        }
+    // 检查用户名是否已存在
+    try {
+      const whereUser = encodeURIComponent(JSON.stringify({ username }));
+      const foundUser = await lcRequest('GET', `/1.1/classes/UserAccount?where=${whereUser}`, null, { useMaster: true });
+      const exists = Array.isArray(foundUser && foundUser.results) && foundUser.results[0];
+      if (exists) {
+        await rateLimitOnFailure(ip, 'register', rl.rec, rl.windowMs, rl.lockMs);
+        return json(409, { error: 'Username taken' });
       }
+    } catch (e) {
+      await rateLimitOnFailure(ip, 'register', rl.rec, rl.windowMs, rl.lockMs);
+      return json(500, { error: 'User lookup failed' });
     }
 
-    // Default access key (read-only)
-    if (!userOut && accessKey) {
-      const submitted = sha256Hex(ACCESS_SALT + accessKey);
-      if (DEFAULT_ACCESS_KEY_HASH && timingSafeEqualHex(submitted, DEFAULT_ACCESS_KEY_HASH)) {
-        userOut = { name: 'access-key', role: process.env.DEFAULT_ROLE || 'reader', permissions: ['read'] };
-      }
+    // 创建用户
+    const passwordHash = sha256Hex(PASS_SALT + password);
+    const role = inviteRec.role || 'reader';
+    const permissions = Array.isArray(inviteRec.permissions) ? inviteRec.permissions : ['read'];
+    const sub = username;
+    try {
+      await lcRequest('POST', '/1.1/classes/UserAccount', { username, passwordHash, role, permissions, sub, nickname: nickname || '' }, { useMaster: true });
+    } catch (e) {
+      await rateLimitOnFailure(ip, 'register', rl.rec, rl.windowMs, rl.lockMs);
+      return json(500, { error: 'Create user failed' });
     }
 
-    // 邀请码登录（管理员指定）：根据 INVITES_JSON 中的元数据签发令牌
-    if (!userOut && inviteCode) {
-      // 严格一次性：不支持使用邀请码进行登录，请使用注册流程
-      await rateLimitOnFailure(ip, 'login', rl.rec, rl.windowMs, rl.lockMs);
-      return json(403, { error: 'Use registration with inviteCode' });
+    // 标记邀请码为已使用
+    try {
+      await lcRequest('PUT', `/1.1/classes/InviteCodes/${inviteRec.objectId}`, { usedBy: username, usedAt: new Date(now).toISOString() }, { useMaster: true });
+    } catch (e) {
+      // 不阻断，记录失败
     }
 
-    if (!userOut) {
-      await rateLimitOnFailure(ip, 'login', rl.rec, rl.windowMs, rl.lockMs);
-      return json(401, { error: 'Invalid credentials' });
-    }
-
-    const payload = {
-      sub: userOut.name,
-      role: userOut.role,
-      permissions: userOut.permissions,
-      iat: now,
-      exp: now + EXP_MS,
-    };
+    // 签发令牌
+    const JWT_SECRET = process.env.JWT_SECRET;
+    const EXP_MS = Number(process.env.JWT_EXP_MS || 86400000);
+    const payload = { sub, role, permissions, iat: now, exp: now + EXP_MS };
     const token = signJWT(payload, JWT_SECRET);
 
-    await rateLimitReset(ip, 'login', rl.rec);
-    return json(200, { token, user: userOut });
+    await rateLimitReset(ip, 'register', rl.rec);
+    return json(200, { token, user: { name: sub, role, permissions, nickname: nickname || '' } });
   } catch (e) {
     return json(500, { error: e.message || 'Internal Error' });
   }
 };
-
-function safeParseJSON(s, fallback) {
-  try { return JSON.parse(s); } catch { return fallback; }
-}

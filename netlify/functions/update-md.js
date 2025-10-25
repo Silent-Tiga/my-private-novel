@@ -97,10 +97,16 @@ exports.handler = async function(event) {
         const expectedSig = Buffer.from(`${parts[0]}.${parts[1]}.${jwtSecret}`).toString('base64');
         if (expectedSig !== parts[2]) throw new Error('Invalid signature');
         if (payload.exp && payload.exp < Date.now()) throw new Error('Token expired');
-        // 需要写权限
+        // 权限：写权限可执行任何动作；评论权限仅可创建讨论贴
         const perms = payload.permissions || [];
         const hasWrite = Array.isArray(perms) && perms.includes('write');
-        if (!hasWrite) return { statusCode: 403, body: JSON.stringify({ error: 'Insufficient permissions' }) };
+        const hasComment = Array.isArray(perms) && perms.includes('comment');
+        // 读取请求体以判断动作与路径
+        const bodyObj = JSON.parse(event.body || '{}');
+        const requestedPath = bodyObj.path || '';
+        const requestedAction = bodyObj.action || '';
+        const canCreateDiscussion = hasComment && requestedAction === 'create_entry' && typeof requestedPath === 'string' && requestedPath.startsWith('content/forum/discussion/');
+        if (!hasWrite && !canCreateDiscussion) return { statusCode: 403, body: JSON.stringify({ error: 'Insufficient permissions' }) };
       } else {
         throw new Error('Malformed token');
       }
