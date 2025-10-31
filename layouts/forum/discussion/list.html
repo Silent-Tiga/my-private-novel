@@ -1,0 +1,79 @@
+{{ define "main" }}
+<section class="forum-discussions" style="max-width: 980px; margin: 24px auto; padding: 0 16px;">
+  <style>
+    .forum-hero { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px; }
+    .forum-hero h1 { margin:0; font-size:28px; }
+    .forum-actions { display:flex; gap:8px; }
+    .btn { padding:8px 12px; border:none; border-radius:8px; cursor:pointer; font-weight:600; }
+    .btn-primary { background:#1f6feb; color:#fff; box-shadow:0 2px 6px rgba(31,111,235,.25); }
+    .btn-secondary { background:#e9eef5; color:#183153; }
+    .filterbar { display:flex; gap:8px; margin:12px 0 20px; }
+    .filterbar input { flex:1; padding:10px 12px; border:1px solid #dde3ea; border-radius:8px; }
+    .threads { list-style:none; padding:0; margin:0; display:grid; grid-template-columns: 1fr; gap:12px; }
+    @media (min-width: 720px) { .threads { grid-template-columns: 1fr 1fr; } }
+    .card { background:#fff; border:1px solid #e5e7eb; border-radius:12px; box-shadow:0 3px 8px rgba(0,0,0,.06); padding:14px; transition: transform .08s ease, box-shadow .2s ease; }
+    .card:hover { transform: translateY(-1px); box-shadow:0 6px 14px rgba(0,0,0,.08); }
+    .card-title { margin:0 0 6px; font-size:18px; }
+    .badge { display:inline-block; padding:3px 8px; border-radius:999px; background:#eff6ff; color:#1d4ed8; font-size:12px; margin-right:6px; }
+    .tags { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+    .tag { display:inline-block; padding:2px 8px; border-radius:999px; background:#f1f5f9; color:#475569; font-size:12px; }
+    .meta { color:#778296; font-size:12px; margin-top:4px; }
+    .empty-tip { color:#7a7a7a; text-align:center; padding:24px; }
+  </style>
+
+  <div class="forum-hero">
+    <div>
+      <h1>讨论贴</h1>
+      <div style="color:#6b7280;">归档浏览与搜索</div>
+    </div>
+    <div class="forum-actions">
+      <a class="btn btn-secondary" href="/forum/">返回讨论区</a>
+      <a class="btn btn-primary" href="/preview-forum.html" target="_blank" rel="noopener">发帖（预览）</a>
+    </div>
+  </div>
+
+  <div class="filterbar">
+    <input id="search-disc" type="search" placeholder="搜索主题、标签或板块..." aria-label="搜索讨论" />
+  </div>
+
+  <ul id="threads" class="threads">
+    {{ $pages := .Pages.ByDate.Reverse }}
+    {{ if not (len $pages | eq 0) }}
+      {{ range $pages }}
+        <li class="card thread" data-title="{{ .Title }}" data-tags="{{ delimit .Params.tags "," }}" data-category="{{ with .Params.category }}{{ . }}{{ end }}">
+          <a href="{{ .RelPermalink }}" class="card-title">{{ .Title }}</a>
+          <div class="meta">
+            {{ with .Params.category }}<span class="badge">{{ . }}</span>{{ end }}
+            <span>{{ .Date.Format "2006-01-02" }}</span>
+            {{ $posts := len .Params.posts }}
+            {{ if gt $posts 0 }} · <span>{{ $posts }} 条回复</span>{{ end }}
+          </div>
+          {{ with .Params.tags }}
+          <div class="tags">
+            {{ range . }}<span class="tag">{{ . }}</span>{{ end }}
+          </div>
+          {{ end }}
+        </li>
+      {{ end }}
+    {{ else }}
+      <li class="empty-tip">暂无讨论主题。</li>
+    {{ end }}
+  </ul>
+</section>
+<script>
+(function(){
+  const q = document.getElementById('search-disc');
+  const items = Array.from(document.querySelectorAll('#threads .thread'));
+  q && q.addEventListener('input', function(){
+    const s = this.value.trim().toLowerCase();
+    items.forEach(li => {
+      const t = (li.dataset.title||'').toLowerCase();
+      const tags = (li.dataset.tags||'').toLowerCase();
+      const cat = (li.dataset.category||'').toLowerCase();
+      const show = !s || t.includes(s) || tags.includes(s) || cat.includes(s);
+      li.style.display = show ? '' : 'none';
+    });
+  });
+})();
+</script>
+{{ end }}

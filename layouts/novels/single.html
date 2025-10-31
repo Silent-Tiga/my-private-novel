@@ -1,0 +1,56 @@
+{{ define "main" }}
+<article class="container" style="max-width:980px;">
+  <header style="margin-bottom:1rem;">
+    <h1 id="novel-title">加载中…</h1>
+    <div id="novel-meta" style="color:#666;"></div>
+  </header>
+  <section style="display:grid;grid-template-columns:300px 1fr;gap:1rem;margin-top:1rem;">
+    <aside style="border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+      <img id="novel-cover" src="" alt="cover" style="width:100%;object-fit:cover;display:none;"/>
+      <div style="padding:.75rem;">
+        <div id="novel-genres" style="margin-bottom:.25rem;color:#555;"></div>
+        <div id="novel-tags" style="margin-bottom:.25rem;color:#777;"></div>
+        <div id="novel-links" style="margin-top:.5rem;"></div>
+      </div>
+    </aside>
+    <div>
+      <div id="novel-description" style="margin-bottom:1rem;color:var(--text-color);"></div>
+      <h3 style="margin:.5rem 0;">章节</h3>
+      <div id="novel-chapters" style="display:flex;flex-direction:column;gap:.5rem;"></div>
+    </div>
+  </section>
+</article>
+<span id="novel-slug" data-slug="{{ .File.TranslationBaseName }}" style="display:none;"></span>
+<script>
+(function(){
+  const slugEl = document.getElementById('novel-slug');
+  const slug = slugEl ? (slugEl.dataset.slug || '') : '';
+  const col = (window.cloudbaseCollections && window.cloudbaseCollections.novels) || 'novels';
+  const db = window.cloudbaseDb;
+  if (!db) { console.warn('CloudBase DB 未初始化'); return; }
+  function md(s){ try { return s; } catch(_) { return s; } }
+  function setText(id, html){ const el = document.getElementById(id); if(el){ el.innerHTML = html || ''; } }
+  function showCover(url){ const img = document.getElementById('novel-cover'); if(url){ img.src = url; img.style.display = 'block'; } }
+  async function load(){
+    try {
+      const res = await db.collection(col).where({ slug: slug }).limit(1).get();
+      const n = (res && res.data && res.data[0]) || null;
+      if (!n) { setText('novel-title', '未找到该小说'); return; }
+      setText('novel-title', n.title || slug);
+      setText('novel-meta', [n.author ? ('作者：' + n.author) : '', n.year ? ('年份：' + n.year) : ''].filter(Boolean).join(' · '));
+      showCover(n.cover);
+      setText('novel-genres', n.genres && n.genres.length ? ('类型：' + n.genres.join(', ')) : '');
+      setText('novel-tags', n.tags && n.tags.length ? ('标签：' + n.tags.join(', ')) : '');
+      const links = n.links || {};
+      const linksHtml = [links.official ? `<div><a href="${links.official}" target="_blank" rel="noopener">官方链接</a></div>` : '', links.wiki ? `<div><a href="${links.wiki}" target="_blank" rel="noopener">外部百科</a></div>` : ''].join('');
+      setText('novel-links', linksHtml);
+      setText('novel-description', md(n.description || ''));
+      const chs = Array.isArray(n.chapters) ? n.chapters : [];
+      const list = document.getElementById('novel-chapters');
+      list.innerHTML = chs.map(c => `<div style="border:1px solid var(--border-color);border-radius:6px;padding:.5rem;"><strong>${c.title||''}</strong>${c.date?`<span style='color:#999;margin-left:.5rem;'>${new Date(c.date).toLocaleDateString()}</span>`:''}<div style="margin-top:.25rem;">${md(c.summary||'')}</div></div>`).join('');
+    } catch(e) { console.error('加载小说详情失败', e); setText('novel-title', '加载失败'); }
+  }
+  document.addEventListener('DOMContentLoaded', load);
+})();
+</script>
+{{ end }}

@@ -1,0 +1,100 @@
+<div class="login-box" style="min-width:280px;">
+  <div id="login-state" style="margin-bottom:.5rem;color:#555;">未登录</div>
+  <form id="login-form" style="display:flex;flex-direction:column;gap:.5rem;">
+    <input id="login-identity" type="text" placeholder="用户名（必填）" style="padding:.5rem;border:1px solid var(--border-color);border-radius:4px;"/>
+    <input id="login-password" type="password" placeholder="密码（必填）" style="padding:.5rem;border:1px solid var(--border-color);border-radius:4px;"/>
+    <button type="submit" style="padding:.5rem;background:var(--primary-color);color:#fff;border:none;border-radius:4px;cursor:pointer;">登录</button>
+    <button type="button" id="login-anon" style="padding:.5rem;border:1px solid var(--border-color);border-radius:4px;cursor:pointer;">匿名登录</button>
+    <div id="login-msg" style="color:#888;font-size:.875rem;"></div>
+  </form>
+</div>
+<script>
+(function(){
+  const auth = window.cloudbaseAuth;
+  const db = window.cloudbaseDb;
+  const usersCol = (window.cloudbaseCollections && window.cloudbaseCollections.users) || 'users';
+  const state = document.getElementById('login-state');
+  const form = document.getElementById('login-form');
+  const msg = document.getElementById('login-msg');
+  const anonBtn = document.getElementById('login-anon');
+  function setState(u){
+    if (!u) { state.textContent = '未登录'; return; }
+    const name = u.name || u.email || u.uid || '已登录';
+    state.textContent = `已登录：${name}（角色：${(window.__CURRENT_USER__ && window.__CURRENT_USER__.role) || '加载中'}）`;
+  }
+  async function ensureProfileByName(name, uid){
+    if (!name) return;
+    try {
+      if (!db) {
+        const role = (name && name.toLowerCase() === 'admin') ? 'admin' : 'reader';
+        const permissions = role === 'admin' ? ['read','write','admin'] : ['read'];
+        const doc = { uid: uid || ('local-' + name), name, email: '', role, permissions };
+        window.__CURRENT_USER__ = doc; localStorage.setItem('currentUser', JSON.stringify(doc)); setState(doc); return;
+      }
+      const res = await db.collection(usersCol).where({ name }).get();
+      let doc = res && res.data && res.data[0];
+      if (!doc) {
+        const role = (name && name.toLowerCase() === 'admin') ? 'admin' : 'reader';
+        const permissions = role === 'admin' ? ['read','write','admin'] : ['read'];
+        doc = { uid: uid || ('local-' + name), name, email: '', role, permissions, createdAt: Date.now() };
+      }
+      // 先本地映射成功，再尝试写库；写库失败也不影响本地登录
+      window.__CURRENT_USER__ = doc; localStorage.setItem('currentUser', JSON.stringify(doc)); setState(doc);
+      if (res && res.data && res.data[0]) { /* 已存在，不写入 */ }
+      else {
+        try { await db.collection(usersCol).doc(doc.uid).set(doc); } catch (writeErr) { console.warn('写入用户档案失败，已使用本地档案', writeErr); }
+      }
+    } catch(e){ console.warn('初始化用户档案失败', e); }
+  }
+  form.addEventListener('submit', async function(e){
+    e.preventDefault(); msg.textContent='';
+    try {
+      const username = document.getElementById('login-identity').value.trim();
+      const password = document.getElementById('login-password').value.trim();
+      if (!username || !password) { msg.textContent='请输入用户名与密码'; return; }
+      const VALID_USERS = { 'admin':'MyAdmin2024!', 'SH':'MySH2024!', 'LK':'MyLK2024!', 'NW':'MyNW2024!', 'MJ':'MyMJ2024!', 'LL':'MyLL2024!' };
+      if (!VALID_USERS[username] || VALID_USERS[username] !== password) { msg.textContent='用户名或密码错误'; return; }
+      // 优先：自定义登录（需后台签发 ticket）
+      let signedIn = false;
+      try {
+        if (auth && typeof auth.signInWithCustomTicket === 'function' && window.cloudbaseCustomTicketEndpoint) {
+          const tRes = await fetch(window.cloudbaseCustomTicketEndpoint + '?uid=' + encodeURIComponent(username));
+          const tJson = await tRes.json();
+          if (tJson && tJson.ticket) { await auth.signInWithCustomTicket(tJson.ticket); signedIn = true; }
+        }
+      } catch(e){ console.warn('自定义登录失败，转匿名会话', e); }
+      // 其次：匿名会话
+      if (!signedIn && auth) {
+        try {
+          let cu = null; try { cu = auth.currentUser; } catch(_){}
+          if (!cu) {
+            if (typeof auth.anonymousAuthProvider === 'function') await auth.anonymousAuthProvider().signIn();
+            else if (typeof auth.signInAnonymously === 'function') await auth.signInAnonymously();
+          }
+        } catch(_){}
+      }
+      // 建档并持久化
+      const role = (username && username.toLowerCase()==='admin') ? 'admin' : 'reader';
+      const permissions = role==='admin' ? ['read','write','admin'] : ['read'];
+      const uid = username;
+      await ensureProfileByName(username, uid);
+      const doc = { uid, name: username, role, permissions };
+      window.__CURRENT_USER__ = doc; localStorage.setItem('currentUser', JSON.stringify(doc));
+      msg.textContent='登录成功';
+    } catch(e){ msg.textContent='登录失败：' + (e && e.message ? e.message : '未知错误'); console.error('登录错误', e); }
+  });
+  anonBtn.addEventListener('click', async function(){
+    msg.textContent='';
+    try {
+      if (!auth) { await ensureProfileByName('匿名用户'); msg.textContent='已匿名登录'; return; }
+      let user = null;
+      if (typeof auth.anonymousAuthProvider === 'function') { const res = await auth.anonymousAuthProvider().signIn(); user = (res && (res.user || res)) || null; }
+      else if (typeof auth.signInAnonymously === 'function') { const res = await auth.signInAnonymously(); user = (res && (res.user || res)) || null; }
+      const cu = user || (auth.currentUser || null);
+      await ensureProfileByName('匿名用户', cu && (cu.uid || cu._id));
+      msg.textContent='已匿名登录';
+    } catch(e){ msg.textContent='匿名登录失败：' + (e && e.message ? e.message : '未知错误'); console.error('匿名登录错误', e); }
+  });
+  try { const cu = auth && auth.currentUser; setState(cu||null); } catch(_){}
+})();
+</script>

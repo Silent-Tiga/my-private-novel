@@ -1,0 +1,46 @@
+{{ define "main" }}
+<section class="container">
+  <header>
+    <h1>作品列表</h1>
+    <input id="search-works" type="search" placeholder="搜索作品或作者..." style="width:100%;padding:.5rem;margin:.5rem 0;" />
+  </header>
+  <div id="work-cards" class="grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:1rem;"></div>
+</section>
+<script>
+(function(){
+  const db = window.cloudbaseDb;
+  const col = (window.cloudbaseCollections && window.cloudbaseCollections.works) || 'works';
+  const root = document.getElementById('work-cards');
+  function card(w){
+    const el = document.createElement('article');
+    el.className = 'card';
+    el.dataset.title = (w.title||'').toLowerCase();
+    el.dataset.author = (w.author||'').toLowerCase();
+    el.dataset.tags = (Array.isArray(w.tags)?w.tags.join(','):'').toLowerCase();
+    el.style.cssText = 'border:1px solid var(--theme-border,#ddd);border-radius:8px;overflow:hidden;';
+    const cover = w.cover ? `<img src="${w.cover}" alt="${w.title||''}" style="width:100%;height:180px;object-fit:cover;"/>` : '';
+    const link = w.slug ? `/works/${encodeURIComponent(w.slug)}/` : '#';
+    el.innerHTML = `${cover?`<a href='${link}'>${cover}</a>`:''}<div style='padding:.75rem;'><h3 style='margin:.2rem 0;'><a href='${link}'>${w.title||''}</a></h3>${w.author?`<div style='font-size:.9rem;color:#666;'>作者：${w.author}</div>`:''}${Array.isArray(w.genres)&&w.genres.length?`<div style='font-size:.85rem;color:#999;'>类型：${w.genres.join(', ')}</div>`:''}</div>`;
+    return el;
+  }
+  async function load(){
+    if (!db) return;
+    try {
+      const res = await db.collection(col).orderBy('updatedAt','desc').limit(50).get();
+      (res.data||[]).forEach(w => root.appendChild(card(w)));
+    } catch(e){ console.warn('加载作品列表失败', e); }
+  }
+  function applyFilter(){
+    const s = (document.getElementById('search-works').value||'').trim().toLowerCase();
+    const cards = Array.from(document.querySelectorAll('#work-cards .card'));
+    cards.forEach(c => {
+      const t = c.dataset.title; const a = c.dataset.author; const tags = c.dataset.tags;
+      const show = !s || (t&&t.includes(s)) || (a&&a.includes(s)) || (tags&&tags.includes(s));
+      c.style.display = show ? '' : 'none';
+    });
+  }
+  document.getElementById('search-works')?.addEventListener('input', applyFilter);
+  document.addEventListener('DOMContentLoaded', load);
+})();
+</script>
+{{ end }}

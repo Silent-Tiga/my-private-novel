@@ -1,0 +1,69 @@
+<section class="novels-page" style="max-width:980px;margin:24px auto;padding:0 16px;">
+  <h1 style="margin:0 0 12px;">小说列表</h1>
+  <div id="novel-list" aria-live="polite">
+    <div style="color:#888">正在连接 CloudBase…</div>
+  </div>
+</section>
+<script>
+(function(){
+  const container = document.getElementById('novel-list');
+  const coll = (window.cloudbaseCollections && window.cloudbaseCollections.novels) || 'novels';
+
+  function renderEmpty(msg){ container.innerHTML = `<div style="color:#888">${msg}</div>`; }
+  function renderError(msg){ container.innerHTML = `<div style="color:#d14343">${msg}</div>`; }
+
+  async function waitForCloudBase(msTotal=5000, step=200){
+    const start = Date.now();
+    while(Date.now() - start < msTotal){
+      if (window.cloudbaseDb && window.cloudbaseAuth){ return true; }
+      await new Promise(r=>setTimeout(r, step));
+    }
+    return false;
+  }
+
+  async function ensureAnon(){
+    try {
+      const isLocalHost = (location.hostname === '127.0.0.1' || location.hostname === 'localhost');
+      if (isLocalHost) return; // 开发环境不进行匿名登录，避免触发线上鉴权端点
+      const auth = window.cloudbaseAuth; if (!auth) return;
+      if (typeof auth.getLoginState === 'function'){
+        const st = await auth.getLoginState(); if (st && st.user) return;
+      }
+      if (auth.anonymousAuthProvider){
+        try { await auth.anonymousAuthProvider().signIn(); } catch(e){}
+      } else if (auth.signInAnonymously){
+        try { await auth.signInAnonymously(); } catch(e){}
+      }
+    } catch(_){}
+  }
+
+  async function load(){
+    const ready = await waitForCloudBase(6000, 250);
+    if (!ready){ renderError('CloudBase 未初始化（请检查 SDK 加载与环境配置）'); return; }
+    await ensureAnon();
+    try {
+      const db = window.cloudbaseDb;
+      const res = await db.collection(coll).get();
+      const list = (res && res.data) || [];
+      if (!list.length){ renderEmpty('暂无小说数据'); return; }
+      const html = list.map(novel => {
+        const title = novel.title || '(未命名)';
+        const summary = novel.summary || '';
+        const tags = Array.isArray(novel.tags) ? novel.tags : [];
+        const tagHtml = tags.length ? `<div style="margin-top:6px;color:#6b7280;font-size:12px;">${tags.map(t=>`#${t}`).join(' ')}</div>` : '';
+        return `<div class="novel-item" style="margin:12px 0;padding:12px;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 3px 8px rgba(0,0,0,.05)">
+          <div style="font-weight:700">${title}</div>
+          ${summary ? `<div style=\"color:#4b5563\">${summary}</div>` : ''}
+          ${tagHtml}
+        </div>`;
+      }).join('');
+      container.innerHTML = html;
+    } catch(e){
+      console.error('加载小说列表失败', e);
+      renderError('加载失败，请稍后重试');
+    }
+  }
+
+  load();
+})();
+</script>

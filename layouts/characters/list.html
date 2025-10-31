@@ -1,0 +1,46 @@
+{{ define "main" }}
+<section class="container">
+  <header>
+    <h1>角色百科</h1>
+    <p>按作品或标签浏览角色。支持前端快速过滤。</p>
+    <input id="search" type="search" placeholder="搜索角色..." style="width:100%;padding:.5rem;margin:.5rem 0;" />
+  </header>
+  <div id="cards" class="grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:1rem;"></div>
+</section>
+<script>
+(function(){
+  const db = window.cloudbaseDb;
+  const col = (window.cloudbaseCollections && window.cloudbaseCollections.characters) || 'characters';
+  const root = document.getElementById('cards');
+  function card(c){
+    const el = document.createElement('article');
+    el.className = 'card';
+    el.dataset.title = (c.title||'').toLowerCase();
+    el.dataset.tags = (Array.isArray(c.tags)?c.tags.join(','):'').toLowerCase();
+    el.style.cssText = 'border:1px solid var(--theme-border,#ddd);border-radius:8px;overflow:hidden;';
+    const img = c.image ? `<img src="${c.image}" alt="${c.title||''}" style="width:100%;height:160px;object-fit:cover;"/>` : '';
+    const link = c.slug ? `/characters/${encodeURIComponent(c.slug)}/` : '#';
+    el.innerHTML = `${img?`<a href='${link}'>${img}</a>`:''}<div style='padding:.75rem;'><h3 style='margin:.2rem 0;'><a href='${link}'>${c.title||''}</a></h3>${c.series?`<div style='font-size:.9rem;color:#666;'>${c.series}</div>`:''}${Array.isArray(c.alias)&&c.alias.length?`<div style='font-size:.85rem;color:#999;'>别名：${c.alias.join(', ')}</div>`:''}${Array.isArray(c.tags)&&c.tags.length?`<div style='margin-top:.3rem;font-size:.8rem;color:#777;'>标签：${c.tags.join(', ')}</div>`:''}</div>`;
+    return el;
+  }
+  async function load(){
+    if (!db) return;
+    try {
+      const res = await db.collection(col).orderBy('updatedAt','desc').limit(50).get();
+      (res.data||[]).forEach(c => root.appendChild(card(c)));
+    } catch(e){ console.warn('加载角色列表失败', e); }
+  }
+  function applyFilter(){
+    const s = (document.getElementById('search').value||'').trim().toLowerCase();
+    const cards = Array.from(document.querySelectorAll('#cards .card'));
+    cards.forEach(c => {
+      const t = c.dataset.title; const tags = c.dataset.tags;
+      const show = !s || (t&&t.includes(s)) || (tags&&tags.includes(s));
+      c.style.display = show ? '' : 'none';
+    });
+  }
+  document.getElementById('search')?.addEventListener('input', applyFilter);
+  document.addEventListener('DOMContentLoaded', load);
+})();
+</script>
+{{ end }}

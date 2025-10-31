@@ -1,5 +1,6 @@
-baseURL: "/"
-title: "我的私人小说"
+baseURL: "https://silent-tiga.github.io/my-private-novel/"
+canonifyURLs: true
+title: "我的私人论坛"
 languageCode: "zh-CN"
 defaultContentLanguage: "zh"
 
@@ -7,18 +8,135 @@ paginate: 5
 
 menu:
   main:
-    - identifier: "novel-collections"
-      name: "小说集"
-      url: "/novel-collections/"
-      weight: 10
-    - identifier: "admin"
-      name: "管理员上传"
-      url: "/admin/"
+    # Explore
+    - identifier: "explore"
+      name: "探索"
+      weight: 5
+    # Explore children
+    - identifier: "explore-home"
+      name: "首页"
+      url: "/"
+      parent: "explore"
+      weight: 1
+    - identifier: "explore-all"
+      name: "全部页面"
+      url: "/all/"
+      parent: "explore"
+      weight: 2
+    - identifier: "explore-tags"
+      name: "标签"
+      url: "/tags/"
+      parent: "explore"
+      weight: 3
+    - identifier: "explore-posts"
+      name: "最近博文"
+      url: "/posts/"
+      parent: "explore"
+      weight: 4
+
+    # Information
+    - identifier: "information"
+      name: "信息"
+      weight: 12
+    # Information children
+    - identifier: "info-characters"
+      name: "角色百科"
+      url: "/characters/"
+      parent: "information"
+      weight: 1
+    - identifier: "info-works"
+      name: "作品列表"
+      url: "/works/"
+      parent: "information"
+      weight: 2
+    - identifier: "info-tiers"
+      name: "等级体系"
+      url: "/info/tiers/"
+      parent: "information"
+      weight: 3
+    - identifier: "info-glossary"
+      name: "术语表"
+      url: "/info/glossary/"
+      parent: "information"
+      weight: 4
+    - identifier: "info-important"
+      name: "重要页面"
+      url: "/info/important/"
+      parent: "information"
+      weight: 5
+
+    # Featured Pages
+    - identifier: "featured"
+      name: "精选"
+      weight: 13
+    # Featured children
+    - identifier: "featured-characters"
+      name: "精选角色"
+      url: "/featured/characters/"
+      parent: "featured"
+      weight: 1
+    - identifier: "featured-works"
+      name: "热门作品"
+      url: "/featured/works/"
+      parent: "featured"
+      weight: 2
+
+    # Guidelines
+    - identifier: "guidelines"
+      name: "指南"
+      weight: 14
+    # Guidelines children
+    - identifier: "guide-editing"
+      name: "编辑指南"
+      url: "/guides/editing/"
+      parent: "guidelines"
+      weight: 1
+    - identifier: "guide-format"
+      name: "格式规范"
+      url: "/guides/format/"
+      parent: "guidelines"
+      weight: 2
+    - identifier: "guide-terminology"
+      name: "术语规范"
+      url: "/guides/terminology/"
+      parent: "guidelines"
+      weight: 3
+    - identifier: "guide-calculation"
+      name: "计算说明"
+      url: "/guides/calculation/"
+      parent: "guidelines"
+      weight: 4
+
+    # Community
+    - identifier: "community"
+      name: "社区"
       weight: 15
+    # Community children
+    - identifier: "community-discussion"
+      name: "讨论归档"
+      url: "/forum/discussion/"
+      parent: "community"
+      weight: 1
+    - identifier: "community-rules"
+      name: "站点规则"
+      url: "/community/rules/"
+      parent: "community"
+      weight: 2
+    - identifier: "community-management"
+      name: "站点管理"
+      url: "/community/management/"
+      parent: "community"
+      weight: 3
+
+    # Others
     - identifier: "about"
-      name: "关于"
+      name: "关于本站"
       url: "/about/"
-      weight: 20
+      weight: 90
+    - identifier: "novels"
+      name: "小说"
+      url: "/novels/"
+      weight: 91
 
 params:
   env: development
@@ -35,15 +153,30 @@ params:
   hideSummary: false
   showtoc: false
   tocopen: false
-  # 访问控制配置
   accessControl:
     enabled: true
-    accessKey: "novel2024"
-    # 设置为true可以在验证后保持访问权限（基于浏览器本地存储）
     persistentAccess: true
+    accessKey: ""
+  # CloudBase 配置
+  cloudbase:
+    enabled: true
+    envId: "my-private-forum-7fq5eue4c2a67da"
+    # 设置生产登录端点以避免默认值跨域
+    authEndpoint: "https://my-private-forum-7fq5eue4c2a67da.ap-shanghai.app.tcloudbase.com/auth"
+    useEmailPassword: true
+    collections:
+      users: "users"
+      posts: "posts"
+      novels: "novels"
+      site_settings: "site_settings"
   assets:
     favicon: "/favicon.ico"
     favicon16x16: "/favicon-16x16.png"
     favicon32x32: "/favicon-32x32.png"
     apple_touch_icon: "/apple-touch-icon.png"
     safari_pinned_tab: "/safari-pinned-tab.svg"
+
+taxonomies:
+  tag: "tags"
+  series: "series"
+  category: "categories"

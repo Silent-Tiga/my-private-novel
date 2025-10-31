@@ -1,0 +1,55 @@
+{{ define "main" }}
+<article class="discussion-single" style="max-width:980px;margin:24px auto;padding:0 16px;">
+  <style>
+    .header { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:12px; }
+    .title { margin:0; font-size:28px; }
+    .chip { display:inline-block; padding:4px 10px; border-radius:999px; background:#eff6ff; color:#1d4ed8; font-size:12px; margin-right:6px; }
+    .tags { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+    .tag { display:inline-block; padding:2px 8px; border-radius:999px; background:#f1f5f9; color:#475569; font-size:12px; }
+    .status { margin-top:8px; color:#b45309; background:#fff7ed; border:1px solid #fde68a; padding:.5rem; border-radius:8px; }
+    .timeline { display:flex; flex-direction:column; gap:12px; }
+    .post { display:grid; grid-template-columns: 40px 1fr; gap:12px; padding:12px; background:#fff; border:1px solid #e5e7eb; border-radius:12px; box-shadow:0 3px 8px rgba(0,0,0,.05); }
+    .avatar { width:40px; height:40px; border-radius:50%; background:#e9eef5; display:flex; align-items:center; justify-content:center; font-weight:700; color:#183153; }
+    .post-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
+    .post-author { font-weight:700; }
+    .post-time { color:#778296; font-size:12px; }
+  </style>
+
+  <header class="header">
+    <div>
+      <h1 class="title">{{ .Title }}</h1>
+      <div>
+        {{ with .Params.category }}<span class="chip">{{ . }}</span>{{ end }}
+        {{ with .Params.tags }}<span class="tags">{{ range . }}<span class="tag">{{ . }}</span>{{ end }}</span>{{ end }}
+      </div>
+    </div>
+    <div>
+      <a class="chip" href="/forum/discussion/">返回列表</a>
+    </div>
+  </header>
+
+  {{ $posts := .Params.posts }}
+  {{ if $posts }}
+  <section aria-label="帖子列表" class="timeline">
+    {{ range $posts }}
+      <div class="post">
+        <div class="avatar">{{ substr .author 0 1 }}</div>
+        <div>
+          <div class="post-head">
+            <span class="post-author">{{ .author }}</span>
+            {{ with .time }}<span class="post-time">{{ . }}</span>{{ end }}
+          </div>
+          <div class="content">{{ .content | markdownify }}</div>
+        </div>
+      </div>
+    {{ end }}
+  </section>
+  {{ else }}
+    <p style="color:#7a7a7a;">暂无帖子内容。</p>
+  {{ end }}
+
+  {{ if eq .Params.status "closed" }}
+    <div class="status">本主题已关闭，保留为只读归档。</div>
+  {{ end }}
+</article>
+{{ end }}

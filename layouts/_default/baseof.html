@@ -5,6 +5,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ if .IsHome }}{{ .Site.Title }}{{ else }}{{ .Title }} | {{ .Site.Title }}{{ end }}</title>
     <meta name="description" content="{{ if .Description }}{{ .Description }}{{ else }}{{ .Site.Params.description }}{{ end }}">
+    {{ partial "cloudbase-init.html" . }}
+    <script>
+      (function(){
+        try {
+          var isLocal = (location.hostname === '127.0.0.1' || location.hostname === 'localhost');
+          var localEndpoint = 'http://127.0.0.1:3000/auth';
+          // 允许通过站点配置覆盖（生产环境）
+          var configured = {{ if .Site.Params.cloudbase.authEndpoint }}"{{ .Site.Params.cloudbase.authEndpoint }}"{{ else }}""{{ end }};
+          if (isLocal) {
+            window.cloudbaseAuthEndpoint = localEndpoint;
+            window.cloudbaseCustomTicketEndpoint = localEndpoint;
+          } else if (configured) {
+            window.cloudbaseAuthEndpoint = configured;
+          }
+        } catch(_) {}
+      })();
+    </script>
     <!-- 访问控制配置（JSON，避免IDE误报JS语法） -->
     <script type="application/json" id="access-control-config">{
       "enabled": {{ .Site.Params.accessControl.enabled }},
@@ -35,107 +52,111 @@
         })();
         const accessControl = window.accessControl;
 
-        // 前端不再生成 JWT，改为后端签发；保留占位以兼容旧代码
-        function generateJWT() { return ''; }
-
-        // 解码JWT令牌（前端仅用于展示和权限提示；实际鉴权由后端完成）
-        function verifyJWT(token) {
+        // 同步读取本地缓存用户（用于 UI gating / 权限遮挡）
+        function getLocalUser() {
             try {
-                const parts = token.split('.');
-                if (parts.length !== 3) return null;
-                const payload = JSON.parse(atob(parts[1]));
-                if (payload.exp && payload.exp < Date.now()) return null;
-                return payload;
+                const str = localStorage.getItem('currentUser');
+                return str ? JSON.parse(str) : null;
+            } catch(_) { return null; }
+        }
+
+
+
+        // 获取当前用户（CloudBase 2.x 异步）
+        async function getCurrentUser() {
+            try {
+                const str = localStorage.getItem('currentUser');
+                if (str) { try { return JSON.parse(str); } catch(_) {} }
+                const auth = window.cloudbaseAuth;
+                if (!auth || typeof auth.getCurrentUser !== 'function') return null;
+                const cu = await auth.getCurrentUser();
+                if (!cu) return null;
+                const role = cu.uid === 'admin' ? 'admin' : 'reader';
+                const permissions = role === 'admin' ? ['read','write','delete','admin'] : ['read'];
+                const user = { uid: cu.uid, email: cu.email || '', role, permissions };
+                try { localStorage.setItem('currentUser', JSON.stringify(user)); } catch(_) {}
+                return user;
             } catch (e) {
-                console.error('JWT解码失败:', e);
+                console.warn('CloudBase 当前用户获取失败:', e);
                 return null;
             }
         }
 
-        // 获取当前用户信息
-        function getCurrentUser() {
-            const token = localStorage.getItem('authToken');
-            if (!token) {
-                return null;
-            }
-            
-            return verifyJWT(token);
-        }
-
-        // 检查访问权限
+        // 检查访问权限（CloudBase 版）
         function checkAccess() {
-            // 检查白名单路径
             const path = window.location.pathname;
-            for (const whitelistPath of accessControl.whitelistPaths) {
-                if (path.startsWith(whitelistPath)) {
-                    return true;
-                }
+            const wl = Array.isArray(accessControl.whitelistPaths) ? accessControl.whitelistPaths : [];
+            for (const whitelistPath of wl) {
+                if (path.startsWith(whitelistPath)) { return true; }
             }
-
-            // 检查JWT令牌
-            const user = getCurrentUser();
-            if (user) {
-                return true;
-            }
-
-            // 检查是否有持久化访问（兼容旧版本）
-            if (accessControl.persistentAccess) {
-                const hasAccess = localStorage.getItem('novelAccessVerified') === 'true' || localStorage.getItem('hasAccess') === 'true';
-                if (hasAccess) {
-                    // 自动升级到JWT认证
-                    const token = generateJWT('legacy-user', accessControl.defaultRole, ['read']);
-                    localStorage.setItem('authToken', token);
-                    return true;
-                }
-            }
-
-            return false;
+            const user = getLocalUser();
+            return !!(user && user.uid);
         }
 
-        // 设置访问权限（改为后端签发JWT）
-        async function setAccess(username, password) {
-            try {
-                const body = username ? { username, password } : { accessKey: password };
-                const bases = ['/.netlify/functions', 'http://localhost:8888/.netlify/functions'];
-                let data = null; let ok = false; let lastError = '';
-                for (const b of bases) {
-                    try {
-                        const res = await fetch(`${b}/auth-login`, {
-                            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
-                        });
-                        data = await res.json().catch(() => null);
-                        if (res.ok && data && data.token && data.user) { ok = true; break; }
-                        lastError = (data && data.error) || `HTTP ${res.status}`;
-                    } catch (err) { lastError = err.message; }
-                }
-                if (!ok || !data) return { success: false, error: lastError || '后端函数不可用' };
-                localStorage.setItem('authToken', data.token);
-                localStorage.setItem('currentUser', JSON.stringify({ name: data.user.name, role: data.user.role }));
-                return { success: true, role: data.user.role };
-            } catch (e) {
-                return { success: false, error: e.message || '网络错误，请重试' };
-            }
-        }
 
-        // 清除访问权限
+
+        // 清除访问权限（CloudBase 版）
         function clearAccess() {
-            localStorage.removeItem('authToken');
-            localStorage.removeItem('novelAccessVerified');
-            localStorage.removeItem('hasAccess');
+            try {
+                const auth = window.cloudbaseAuth;
+                if (auth && typeof auth.signOut === 'function') {
+                    auth.signOut();
+                }
+            } catch(e) { console.warn('CloudBase signOut 失败:', e); }
+            window.__CURRENT_USER__ = null;
+            try {
+                localStorage.removeItem('novelAccessVerified');
+                localStorage.removeItem('hasAccess');
+                localStorage.removeItem('currentUser');
+            } catch(_) {}
         }
 
-        // 检查用户是否有特定权限
+        // 检查用户是否有特定权限（CloudBase 版）
         function hasPermission(permission) {
-            const user = getCurrentUser();
-            if (!user || !user.permissions) {
-                return false;
-            }
-            return user.permissions.includes(permission);
+            const user = getLocalUser();
+            if (!user) return false;
+            if (user.role === 'admin') return true;
+            return Array.isArray(user.permissions) && user.permissions.includes(permission);
         }
+
+        // 统一：确保已加载 CloudBase 用户档案（含角色/权限）
+        async function ensureUserProfile() {
+            try {
+                const auth = window.cloudbaseAuth;
+                const db = window.cloudbaseDb;
+                if (!auth || !db || typeof auth.getCurrentUser !== 'function') return;
+                const cu = await auth.getCurrentUser();
+                if (!cu) return;
+                const usersCol = (window.cloudbaseCollections && window.cloudbaseCollections.users) || 'users';
+                let doc = null;
+                try {
+                    // 以 uid 作为主键，若不存在则创建默认 reader 档案
+                    const res = await db.collection(usersCol).doc(cu.uid).get();
+                    if (res && res.data && res.data.length) {
+                        doc = res.data[0];
+                    } else {
+                        const role = 'reader';
+                        const permissions = ['read'];
+                        await db.collection(usersCol).doc(cu.uid).set({ uid: cu.uid, email: cu.email || '', role, permissions, createdAt: Date.now() });
+                        doc = { uid: cu.uid, email: cu.email || '', role, permissions };
+                    }
+                } catch (e) {
+                    console.warn('读取/初始化用户档案失败，使用默认 reader：', e);
+                    doc = { uid: cu.uid, email: cu.email || '', role: 'reader', permissions: ['read'] };
+                }
+                try { localStorage.setItem('currentUser', JSON.stringify(doc)); } catch(_) {}
+            } catch (e) {
+                console.warn('ensureUserProfile 失败:', e);
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', function(){
+            ensureUserProfile();
+        });
 
         // 显示用户信息
         function showUserInfo() {
-            const user = getCurrentUser();
+            const user = getLocalUser();
             if (!user) {
                 return;
             }
@@ -173,19 +194,64 @@
             editNickBtn.addEventListener('click', async function() {
                 const nn = prompt('输入新的昵称（不超过64字符）');
                 if (!nn) return;
-                const jwt = localStorage.getItem('authToken');
-                if (!jwt) return;
                 try {
-                    const res = await fetch('/.netlify/functions/user-profile', {
-                        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${jwt}` }, body: JSON.stringify({ nickname: nn })
-                    });
-                    const data = await res.json().catch(() => null);
-                    if (res.ok && data && data.nickname) {
-                        nicknameSpan.textContent = `昵称: ${data.nickname}`;
-                    } else {
-                        alert((data && data.error) || '昵称设置失败');
+                    const auth = window.cloudbaseAuth;
+                    const db = window.cloudbaseDb;
+                    if (!auth || !db || typeof auth.getCurrentUser !== 'function') {
+                        alert('未登录，无法修改昵称');
+                        return;
                     }
-                } catch (e) { alert(e.message || '网络错误'); }
+                    const cu = await auth.getCurrentUser();
+                    const usersCol = (window.cloudbaseCollections && window.cloudbaseCollections.users) || 'users';
+                    await db.collection(usersCol).doc(cu.uid).update({
+                        nickname: nn,
+                        updatedAt: Date.now()
+                    });
+                    try {
+                        const cur = getLocalUser();
+                        if (cur) { cur.nickname = nn; localStorage.setItem('currentUser', JSON.stringify(cur)); }
+                    } catch(_) {}
+                    nicknameSpan.textContent = `昵称: ${nn}`;
+                } catch (e) { alert(e.message || '更新失败'); }
+            });
+
+            const changePwdBtn = document.createElement('button');
+            changePwdBtn.textContent = '改密码';
+            changePwdBtn.style.padding = '4px 8px';
+            changePwdBtn.style.backgroundColor = '#f39c12';
+            changePwdBtn.style.color = 'white';
+            changePwdBtn.style.border = 'none';
+            changePwdBtn.style.borderRadius = '4px';
+            changePwdBtn.style.fontSize = '0.75rem';
+            changePwdBtn.style.cursor = 'pointer';
+            changePwdBtn.addEventListener('click', async function() {
+                try {
+                    const oldPassword = prompt('输入原密码');
+                    if (!oldPassword) return;
+                    const newPassword = prompt('输入新密码');
+                    if (!newPassword) return;
+                    const u = getLocalUser();
+                    if (!u || !u.uid) { alert('未登录，不能改密'); return; }
+                    const envId = window.CLOUDBASE_ENV_ID;
+                    let endpoint = window.cloudbaseAuthEndpoint || window.cloudbaseCustomTicketEndpoint;
+                    if (!endpoint && envId) { endpoint = `https://${envId}.ap-shanghai.app.tcloudbase.com/auth`; }
+                    if (!endpoint) { alert('登录接口未配置，请设置 window.cloudbaseAuthEndpoint 或 cloudbaseCustomTicketEndpoint'); return; }
+                    const res = await fetch(endpoint, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ action: 'changePassword', data: { username: u.uid, oldPassword, newPassword } })
+                    });
+                    const data = await res.json();
+                    if (data && data.success) {
+                        alert('密码修改成功，请重新登录');
+                        try { await window.cloudbaseAuth.signOut(); } catch(_){}
+                        localStorage.removeItem('currentUser');
+                        location.reload();
+                    } else {
+                        alert('修改失败：' + ((data && data.error) ? data.error : '未知错误'));
+                    }
+                } catch(e) {
+                    alert('修改失败：' + (e.message || '网络错误'));
+                }
             });
 
             const logoutButton = document.createElement('button');
@@ -202,29 +268,15 @@
             userInfo.appendChild(roleSpan);
             userInfo.appendChild(nicknameSpan);
             userInfo.appendChild(editNickBtn);
+            userInfo.appendChild(changePwdBtn);
             userInfo.appendChild(logoutButton);
             document.body.appendChild(userInfo);
 
-            // 加载昵称
-            (async function(){
-                const jwt = localStorage.getItem('authToken');
-                if (!jwt) { nicknameSpan.textContent = '昵称: (未登录)'; return; }
-                try {
-                    const bases = ['/.netlify/functions', 'http://localhost:8888/.netlify/functions'];
-                    let ok = false; let data = null;
-                    for (const b of bases) {
-                        try {
-                            const res = await fetch(`${b}/user-profile`, { method: 'GET', headers: { 'Authorization': `Bearer ${jwt}` } });
-                            const json = await res.json().catch(() => null);
-                            if (res.ok && json) { ok = true; data = json; break; }
-                        } catch (_) {}
-                    }
-                    if (ok && data && typeof data.nickname === 'string') {
-                        nicknameSpan.textContent = `昵称: ${data.nickname || '(未设置)'}`;
-                    } else {
-                        nicknameSpan.textContent = '昵称: (未设置)';
-                    }
-                } catch (_) { nicknameSpan.textContent = '昵称: (加载失败)'; }
+            // 加载昵称（CloudBase）
+            (function(){
+                const u = getLocalUser();
+                if (!u) { nicknameSpan.textContent = '昵称: (未登录)'; return; }
+                nicknameSpan.textContent = `昵称: ${u.nickname || '(未设置)'}`;
             })();
         }
 
@@ -271,17 +323,50 @@
             const form = document.createElement('form');
             form.addEventListener('submit', async function(event) {
                 event.preventDefault();
-                const username = document.getElementById('username').value;
-                const password = document.getElementById('password').value;
-                
-                const result = await setAccess(username, password);
-                if (result.success) {
+                const username = document.getElementById('username').value.trim();
+                const password = document.getElementById('password').value.trim();
+                try {
+                    // 服务端校验：通过云函数验证用户名与密码（不在前端硬编码）
+                    if (!username || !password) { throw new Error('请输入用户名与密码'); }
+                    // 名单限制与密码校验交由后端完成；前端仅收集凭据
+
+                    const auth = window.cloudbaseAuth;
+
+                    // 自定义登录：调用云函数 HTTP 入口，后端校验用户名与密码并签发票据
+                    let signedIn = false;
+                    let serverUser = null;
+                    try {
+                        if (auth && typeof auth.signInWithCustomTicket === 'function') {
+                            const envId = window.CLOUDBASE_ENV_ID;
+                            let endpoint = window.cloudbaseAuthEndpoint || window.cloudbaseCustomTicketEndpoint;
+                            if (!endpoint && envId) { endpoint = `https://${envId}.ap-shanghai.app.tcloudbase.com/auth`; }
+                            if (!endpoint) { throw new Error('登录接口未配置，请设置 window.cloudbaseAuthEndpoint 或 cloudbaseCustomTicketEndpoint'); }
+                            const tRes = await fetch(endpoint, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ action: 'login', data: { username, password } })
+                            });
+                            const tJson = await tRes.json();
+                            if (tJson && tJson.success && tJson.token) {
+                                await auth.signInWithCustomTicket(tJson.token);
+                                signedIn = true;
+                                serverUser = tJson.user || { uid: username };
+                            } else {
+                                throw new Error((tJson && tJson.error) ? tJson.error : '登录失败');
+                            }
+                        }
+                    } catch (e) { console.warn('自定义登录失败', e); }
+
+                    if (!signedIn) { throw new Error('用户名或密码错误'); }
+
+                    // 持久化并刷新（前端不直接读写 users 集合）
+                    localStorage.setItem('currentUser', JSON.stringify(serverUser));
                     location.reload();
-                } else {
-                    document.getElementById('errorMessage').textContent = result.error;
-                    setTimeout(function() {
-                        document.getElementById('errorMessage').textContent = '';
-                    }, 3000);
+                    return;
+                } catch (err) {
+                    console.error('登录失败', err);
+                    document.getElementById('errorMessage').textContent = (err && err.message) ? err.message : '登录失败，请检查账户或网络';
+                    setTimeout(function() { document.getElementById('errorMessage').textContent = ''; }, 3000);
                 }
             });
             
@@ -290,7 +375,7 @@
             usernameContainer.style.marginBottom = '1.5rem';
             
             const usernameLabel = document.createElement('label');
-            usernameLabel.textContent = '用户名（可选）';
+            usernameLabel.textContent = '用户名（必填）';
             usernameLabel.htmlFor = 'username';
             usernameLabel.style.display = 'block';
             usernameLabel.style.textAlign = 'left';
@@ -300,7 +385,7 @@
             const usernameInput = document.createElement('input');
             usernameInput.type = 'text';
             usernameInput.id = 'username';
-            usernameInput.placeholder = 'admin/editor/reader（留空使用默认访问）';
+            usernameInput.placeholder = '请输入用户名';
             usernameInput.style.width = '100%';
             usernameInput.style.padding = '0.75rem';
             usernameInput.style.border = '1px solid #ddd';
@@ -325,7 +410,7 @@
             passwordContainer.style.marginBottom = '1.5rem';
             
             const passwordLabel = document.createElement('label');
-            passwordLabel.textContent = '密码';
+            passwordLabel.textContent = '密码（必填）';
             passwordLabel.htmlFor = 'password';
             passwordLabel.style.display = 'block';
             passwordLabel.style.textAlign = 'left';
@@ -335,7 +420,7 @@
             const passwordInput = document.createElement('input');
             passwordInput.type = 'password';
             passwordInput.id = 'password';
-            passwordInput.placeholder = '请输入访问密钥或密码';
+            passwordInput.placeholder = '请输入密码';
             passwordInput.style.width = '100%';
             passwordInput.style.padding = '0.75rem';
             passwordInput.style.border = '1px solid #ddd';
@@ -401,94 +486,19 @@
             btnLogin.style.color = 'white';
             btnLogin.style.borderRadius = '4px';
 
-            const btnRegister = document.createElement('button');
-            btnRegister.type = 'button';
-            btnRegister.textContent = '注册（邀请码）';
-            btnRegister.style.padding = '6px 12px';
-            btnRegister.style.border = '1px solid #ddd';
-            btnRegister.style.backgroundColor = 'white';
-            btnRegister.style.color = '#333';
-            btnRegister.style.borderRadius = '4px';
-
+            // 已移除注册按钮（仅保留登录）
             switchContainer.appendChild(btnLogin);
-            switchContainer.appendChild(btnRegister);
 
-            // 注册表单（邀请码）
-            const regForm = document.createElement('form');
-            regForm.style.display = 'none';
-            regForm.addEventListener('submit', async function(event) {
-                event.preventDefault();
-                const invite = document.getElementById('inviteCode').value.trim();
-                const regUser = document.getElementById('regUsername').value.trim();
-                const regPass = document.getElementById('regPassword').value;
-                const nick = document.getElementById('regNickname').value.trim();
-                if (!invite || !regUser || !regPass) {
-                    document.getElementById('errorMessage').textContent = '请填写邀请码、用户名与密码';
-                    return;
-                }
-                const bases = ['/.netlify/functions', 'http://localhost:8888/.netlify/functions'];
-                let data = null; let ok = false; let lastError = '';
-                for (const b of bases) {
-                    try {
-                        const res = await fetch(`${b}/auth-register`, {
-                            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ inviteCode: invite, username: regUser, password: regPass, nickname: nick })
-                        });
-                        data = await res.json().catch(() => null);
-                        if (res.ok && data && data.token && data.user) { ok = true; break; }
-                        lastError = (data && data.error) || `HTTP ${res.status}`;
-                    } catch (err) { lastError = err.message; }
-                }
-                if (!ok || !data) {
-                    document.getElementById('errorMessage').textContent = lastError || '注册失败';
-                    return;
-                }
-                localStorage.setItem('authToken', data.token);
-                localStorage.setItem('currentUser', JSON.stringify({ name: data.user.name, role: data.user.role }));
-                location.reload();
-            });
+            // 已移除注册表单（静态站点不支持注册）
 
-            const inviteInput = document.createElement('input');
-            inviteInput.type = 'text'; inviteInput.id = 'inviteCode'; inviteInput.placeholder = '邀请码';
-            inviteInput.style.width = '100%'; inviteInput.style.padding = '0.75rem'; inviteInput.style.border = '1px solid #ddd'; inviteInput.style.borderRadius = '4px'; inviteInput.style.marginBottom = '1rem';
-
-            const regUsernameInput = document.createElement('input');
-            regUsernameInput.type = 'text'; regUsernameInput.id = 'regUsername'; regUsernameInput.placeholder = '设置用户名';
-            regUsernameInput.style.width = '100%'; regUsernameInput.style.padding = '0.75rem'; regUsernameInput.style.border = '1px solid #ddd'; regUsernameInput.style.borderRadius = '4px'; regUsernameInput.style.marginBottom = '1rem';
-
-            const regPasswordInput = document.createElement('input');
-            regPasswordInput.type = 'password'; regPasswordInput.id = 'regPassword'; regPasswordInput.placeholder = '设置密码';
-            regPasswordInput.style.width = '100%'; regPasswordInput.style.padding = '0.75rem'; regPasswordInput.style.border = '1px solid #ddd'; regPasswordInput.style.borderRadius = '4px'; regPasswordInput.style.marginBottom = '1rem';
-
-            const regNicknameInput = document.createElement('input');
-            regNicknameInput.type = 'text'; regNicknameInput.id = 'regNickname'; regNicknameInput.placeholder = '设置昵称（可选）';
-            regNicknameInput.style.width = '100%'; regNicknameInput.style.padding = '0.75rem'; regNicknameInput.style.border = '1px solid #ddd'; regNicknameInput.style.borderRadius = '4px'; regNicknameInput.style.marginBottom = '1rem';
-
-            const regSubmit = document.createElement('button'); regSubmit.type = 'submit'; regSubmit.textContent = '注册并登录';
-            regSubmit.style.width = '100%'; regSubmit.style.padding = '0.75rem'; regSubmit.style.backgroundColor = '#3a7bd5'; regSubmit.style.color = 'white'; regSubmit.style.border = 'none'; regSubmit.style.borderRadius = '4px'; regSubmit.style.fontSize = '1rem'; regSubmit.style.cursor = 'pointer';
-
-            regForm.appendChild(inviteInput);
-            regForm.appendChild(regUsernameInput);
-            regForm.appendChild(regPasswordInput);
-            regForm.appendChild(regNicknameInput);
-            regForm.appendChild(regSubmit);
-
-            // 切换逻辑
+            // 切换逻辑（仅登录）
             btnLogin.addEventListener('click', function(){
                 form.style.display = 'block';
-                regForm.style.display = 'none';
                 btnLogin.style.backgroundColor = '#3a7bd5'; btnLogin.style.color = 'white';
-                btnRegister.style.backgroundColor = 'white'; btnRegister.style.color = '#333';
-            });
-            btnRegister.addEventListener('click', function(){
-                form.style.display = 'none';
-                regForm.style.display = 'block';
-                btnRegister.style.backgroundColor = '#3a7bd5'; btnRegister.style.color = 'white';
-                btnLogin.style.backgroundColor = 'white'; btnLogin.style.color = '#333';
             });
 
             // 默认显示登录
             form.style.display = 'block';
-            regForm.style.display = 'none';
             
             // 组装表单
             form.appendChild(usernameContainer);
@@ -501,10 +511,10 @@
             loginContainer.appendChild(description);
             loginContainer.appendChild(switchContainer);
             loginContainer.appendChild(form);
-            loginContainer.appendChild(regForm);
             
             // 添加到页面
             document.body.appendChild(loginContainer);
+            window.showLoginForm = createLoginForm;
         }
 
         // 初始化访问控制
@@ -939,6 +949,12 @@
                     <span style="color: var(--light-text);">勾选表示保存为草稿</span>
                 </div>
                 
+                <div style="margin-bottom: 20px;">
+                    <label style="display: block; margin-bottom: 5px; color: var(--text-color);">是否公开</label>
+                    <input type="checkbox" id="is-public" style="margin-right: 10px;">
+                    <span style="color: var(--light-text);">勾选表示公开内容（默认私密，仅登录可见）</span>
+                </div>
+                
                 <div style="display: flex; gap: 10px;">
                     <button type="submit" style="flex: 1; padding: 12px; background-color: var(--primary-color); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px;">保存内容</button>
                 </div>
@@ -971,38 +987,55 @@
         <textarea id="invite-output" readonly style="display:none; margin-top: 8px; width: 100%; height: 120px; padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; font-family: monospace;" placeholder="生成的邀请码将显示在此，按行分隔"></textarea>
     </div>
     <div id="current-md-path" data-path="{{ with .File }}{{ .Path }}{{ else }}{{ "" }}{{ end }}" style="display:none;"></div>
-    <script>
-        // 当前页面对应的 Markdown 路径（如果可用）
-        window.CURRENT_MD_PATH = document.getElementById('current-md-path')?.dataset.path || "";
-        
-        // 管理员快捷操作逻辑
+     <div id="site-mode" data-offline="{{ if .Site.Params.offline }}true{{ else }}false{{ end }}" style="display:none;"></div>
+     <script>
+         // 当前页面对应的 Markdown 路径（如果可用）
+         window.CURRENT_MD_PATH = document.getElementById('current-md-path')?.dataset.path || "";
+         
+         // 管理员快捷操作逻辑
         document.addEventListener('DOMContentLoaded', function() {
-            const user = getCurrentUser();
+            const user = getLocalUser();
             const panel = document.getElementById('admin-quick-actions');
             const statusEl = document.getElementById('admin-action-status');
+            const OFFLINE = document.getElementById('site-mode')?.dataset.offline === 'true';
+            if (OFFLINE) { if (panel) panel.style.display = 'none'; return; }
             if (user && hasPermission('write')) {
                 panel.style.display = 'block';
                 const adminControls = ['invite-count','invite-days','invite-role','invite-perms','invite-assigned','generate-invites','invite-output'];
                 if (!hasPermission('admin')) { adminControls.forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'none'; }); }
             }
             async function callUpdate(path, action, payload, message) {
-                const jwt = (window.__ACCESS__ && window.__ACCESS__.jwt) || localStorage.getItem('jwt') || localStorage.getItem('authToken') || '';
-                const bases = ['/.netlify/functions', 'http://localhost:8888/.netlify/functions'];
-                let ok = false; let json = null; let lastError = '';
-                for (const b of bases) {
+                let ok = false; let lastError = '';
+                const user = getLocalUser();
+                const record = { repo: 'Silent-Tiga/my-private-novel', path, action, payload, message, userId: user && user.uid ? user.uid : '', ts: Date.now() };
+                try {
+                    let db = null;
+                    if (window.cloudbaseDb) {
+                        db = window.cloudbaseDb;
+                    } else if (window.cloudbase && window.cloudbase.CloudBase) {
+                        const envId = window.CLOUDBASE_ENV_ID || '';
+                        const app = window.cloudbase.init({ env: envId });
+                        db = app.database();
+                    }
+                    if (db) {
+                        const res = await db.collection('admin_actions').add(record);
+                        ok = !!res && (!!res.id || !!res._id);
+                    }
+                } catch (err) {
+                    lastError = err && err.message ? err.message : String(err);
+                }
+                if (!ok) {
                     try {
-                        const body = { repo: 'Silent-Tiga/my-private-novel', path, action, payload, message };
-                        const res = await fetch(`${b}/update-md`, {
-                            method: 'POST', headers: { 'Content-Type': 'application/json', ...(jwt ? { 'Authorization': `Bearer ${jwt}` } : {}) }, body: JSON.stringify(body)
-                        });
-                        const ct = res.headers.get('content-type') || '';
-                        if (ct.includes('application/json')) { json = await res.json(); }
-                        if (res.ok && json) { ok = true; break; }
-                        lastError = json && json.error ? json.error : `HTTP ${res.status}`;
-                    } catch(err) { lastError = err.message; }
+                        const arr = JSON.parse(localStorage.getItem('pendingAdminActions') || '[]');
+                        arr.push(record);
+                        localStorage.setItem('pendingAdminActions', JSON.stringify(arr));
+                        ok = true;
+                    } catch(e2) {
+                        lastError = lastError || (e2 && e2.message ? e2.message : String(e2));
+                    }
                 }
                 if (ok) {
-                    statusEl.textContent = '操作成功，Netlify 将自动重新构建。';
+                    statusEl.textContent = '操作已记录（CloudBase/离线队列）。';
                 } else {
                     let msg = '操作失败：';
                     const err = lastError || '';
@@ -1015,7 +1048,7 @@
                     } else if (err) {
                         msg += err;
                     } else {
-                        msg += '后端函数不可用';
+                        msg += 'CloudBase 不可用且无法写入本地队列';
                     }
                     statusEl.textContent = msg;
                 }
@@ -1055,8 +1088,6 @@
             const genBtn = document.getElementById('generate-invites');
             if (genBtn) {
                 genBtn.addEventListener('click', async function() {
-                    const jwt = (window.__ACCESS__ && window.__ACCESS__.jwt) || localStorage.getItem('jwt') || localStorage.getItem('authToken') || '';
-                    if (!jwt) { alert('请先登录'); return; }
                     const count = Number(document.getElementById('invite-count').value || '');
                     const expDays = Number(document.getElementById('invite-days').value || '');
                     const role = (document.getElementById('invite-role').value || '').trim();
@@ -1073,23 +1104,33 @@
                     if (role) payload.role = role;
                     if (permissions) payload.permissions = permissions;
                     if (assignedId) payload.assignedId = assignedId;
-                    const bases = ['/.netlify/functions', 'http://localhost:8888/.netlify/functions'];
-                    let ok = false; let data = null; let lastError = '';
-                    for (const b of bases) {
-                        try {
-                            const res = await fetch(`${b}/admin-create-invites`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${jwt}` }, body: JSON.stringify(payload) });
-                            const ct = res.headers.get('content-type') || '';
-                            const json = ct.includes('application/json') ? await res.json() : null;
-                            if (res.ok && json) { ok = true; data = json; break; }
-                            lastError = (json && json.error) || `HTTP ${res.status}`;
-                        } catch (e) { lastError = e.message || '网络错误'; }
+                    let ok = false; let lastError = '';
+                    try {
+                        const user = getLocalUser();
+                        const record = { action: 'create_invites', payload, userId: user && user.uid ? user.uid : '', ts: Date.now() };
+                        if (window.cloudbaseDb) {
+                            try {
+                                const res = await window.cloudbaseDb.collection('admin_actions').add(record);
+                                ok = !!res && (!!res.id || !!res._id);
+                            } catch (e) { lastError = e.message || String(e); }
+                        }
+                        if (!ok) {
+                            try {
+                                const arr = JSON.parse(localStorage.getItem('pendingAdminActions') || '[]');
+                                arr.push(record);
+                                localStorage.setItem('pendingAdminActions', JSON.stringify(arr));
+                                ok = true;
+                            } catch (e) { lastError = lastError || (e.message || String(e)); }
+                        }
+                    } catch (e) { lastError = e.message || String(e); }
+                    if (ok) {
+                        statusEl.textContent = '已记录邀请码生成请求（CloudBase/离线队列）。';
+                        const output = document.getElementById('invite-output');
+                        output.value = '请求已记录，等待后台处理生成具体邀请码';
+                        output.style.display = 'block';
+                    } else {
+                        statusEl.textContent = `生成失败：${lastError || 'CloudBase 不可用且无法写入本地队列'}`;
                     }
-                    if (!ok) { statusEl.textContent = `生成失败：${lastError}`; return; }
-                    statusEl.textContent = `已生成 ${data.count} 条邀请码`;
-                    const output = document.getElementById('invite-output');
-                    const lines = (data.items || []).map(it => it.code).join('\n');
-                    output.value = lines;
-                    output.style.display = 'block';
                 });
             }
         });
@@ -1097,7 +1138,9 @@
     <script>
         // 初始化上传器
         function initUploader() {
-            const user = getCurrentUser();
+            const OFFLINE = document.getElementById('site-mode')?.dataset.offline === 'true';
+            if (OFFLINE) { return; }
+            const user = getLocalUser();
             const floatBtn = document.getElementById('uploader-float-btn');
             const modal = document.getElementById('uploader-modal');
             const showBtn = document.getElementById('show-uploader-btn');
@@ -1219,6 +1262,7 @@
                 const content = document.getElementById('content').value.trim();
                 const tags = document.getElementById('tags').value.trim();
                 const isDraft = document.getElementById('draft').checked;
+                const isPublic = document.getElementById('is-public').checked;
                 
                 // 图片上传专用处理
                 if (type === 'image') {
@@ -1244,9 +1288,9 @@
                      reader.onload = async () => {
                          try {
                              const dataUrl = reader.result;
-                             const jwt = localStorage.getItem('authToken');
-                             if (!jwt) {
-                                 uploadStatus.innerHTML = '<span style="color: red;">未登录或令牌缺失，请先登录后再上传图片</span>';
+                             const user = getLocalUser();
+                             if (!user || !hasPermission('write')) {
+                                 uploadStatus.innerHTML = '<span style="color: red;">未登录或无写权限，请先登录</span>';
                                  submitBtn && (submitBtn.disabled = false);
                                  return;
                              }
@@ -1295,41 +1339,25 @@
                                  filename: finalName,
                                  sha256: shaHex
                              };
-                             const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${jwt}` };
-                             const bases = ['/.netlify/functions', 'http://localhost:8888/.netlify/functions'];
-                             let ok = false; let json = null; let lastError = '';
-                             for (const b of bases) {
-                                 try {
-                                     const res = await fetch(`${b}/upload-image`, {
-                                         method: 'POST',
-                                         headers,
-                                         body: JSON.stringify(body)
-                                     });
-                                     const ct = res.headers.get('content-type') || '';
-                                     if (ct.includes('application/json')) {
-                                         json = await res.json();
-                                     } else {
-                                         const text = await res.text();
-                                         json = { message: text };
-                                     }
-                                     if (res.ok && json) { ok = true; break; }
-                                     lastError = json && (json.error || json.message) ? (json.error || json.message) : `HTTP ${res.status}`;
-                                 } catch (e) { lastError = e.message; }
-                             }
-                             if (!ok) throw new Error(lastError || '后端函数不可用，请使用 netlify dev 本地运行或部署到 Netlify');
-                             const url = (json && json.url) ? json.url : (json && json.path ? ('/' + json.path.replace(/^static\//,'')) : '');
-                             if (url) {
-                                 const contentEl = document.getElementById('content');
-                                 contentEl.value = (contentEl.value || '') + `\n\n![](${url})\n`;
-                                 copyImageUrlBtn.style.display = 'inline-block';
-                                 copyImageUrlBtn.onclick = async () => {
-                                     try { await navigator.clipboard.writeText(url); imageProgress.textContent = '已复制图片链接到剪贴板'; } catch(_) {}
-                                 };
-                                 imageProgress.textContent = `上传成功：${url}`;
-                             } else {
-                                 imageProgress.textContent = '上传完成，可在仓库 static/images 查看。';
-                             }
+                             let ok = false; let lastError = '';
+                             try {
+                                 if (window.cloudbaseDb) {
+                                     const rec = { type: 'image', folder, filename: finalName, sha256: shaHex, file_base64: prepared.base64, ts: Date.now() };
+                                     const res = await window.cloudbaseDb.collection('uploads').add(rec);
+                                     ok = !!res && (!!res.id || !!res._id);
+                                 }
+                                 if (!ok) {
+                                     const arr = JSON.parse(localStorage.getItem('pendingUploads') || '[]');
+                                     arr.push({ type: 'image', folder, filename: finalName, sha256: shaHex, file_base64: prepared.base64, ts: Date.now() });
+                                     localStorage.setItem('pendingUploads', JSON.stringify(arr));
+                                     ok = true;
+                                 }
+                             } catch (e) { lastError = e.message || String(e); }
+                             if (!ok) throw new Error(lastError || 'CloudBase 不可用且无法写入本地队列');
+                             imageProgress.textContent = '已记录图片上传任务（CloudBase/离线队列）';
+                             copyImageUrlBtn.style.display = 'none';
                              // 保留原图（仅当已压缩且选择保留原图）
+                             let ok2 = false; let lastError2 = '';
                              if (compressWebp && keepOriginal && compressWebp.checked && keepOriginal.checked && (file.type === 'image/jpeg' || file.type === 'image/png')) {
                                  try {
                                      const originalB64 = dataUrl.split(',')[1];
@@ -1345,26 +1373,20 @@
                                      const origExt = file.type === 'image/jpeg' ? 'jpg' : 'png';
                                      const origName = `${ts}-${nameSlug}.${origExt}`;
                                      const body2 = { file_base64: originalB64, folder, filename: origName, sha256: originalSha };
-                                     const bases2 = ['/.netlify/functions', 'http://localhost:8888/.netlify/functions'];
-                                     let ok2 = false; let json2 = null; let lastError2 = '';
-                                     for (const b2 of bases2) {
-                                         try {
-                                             const res2 = await fetch(`${b2}/upload-image`, { method: 'POST', headers, body: JSON.stringify(body2) });
-                                             const ct2 = res2.headers.get('content-type') || '';
-                                             if (ct2.includes('application/json')) json2 = await res2.json(); else { const t2 = await res2.text(); json2 = { message: t2 }; }
-                                             if (res2.ok && json2) { ok2 = true; break; }
-                                             lastError2 = json2 && (json2.error || json2.message) ? (json2.error || json2.message) : `HTTP ${res2.status}`;
-                                         } catch (e2) { lastError2 = e2.message; }
-                                     }
-                                     if (ok2) {
-                                         const url2 = (json2 && json2.url) ? json2.url : (json2 && json2.path ? ('/' + json2.path.replace(/^static\//,'')) : '');
-                                         if (url2) {
-                                             const contentEl = document.getElementById('content');
-                                             contentEl.value = (contentEl.value || '') + `\n原图：${url2}\n`;
+                                     try {
+                                         if (window.cloudbaseDb) {
+                                             const rec2 = { type: 'image', folder, filename: origName, sha256: originalSha, file_base64: originalB64, ts: Date.now() };
+                                             const res2 = await window.cloudbaseDb.collection('uploads').add(rec2);
+                                             ok2 = !!res2 && (!!res2.id || !!res2._id);
                                          }
-                                     } else {
-                                         console.warn('保留原图上传失败', lastError2);
-                                     }
+                                         if (!ok2) {
+                                             const arr2 = JSON.parse(localStorage.getItem('pendingUploads') || '[]');
+                                             arr2.push({ type: 'image', folder, filename: origName, sha256: originalSha, file_base64: originalB64, ts: Date.now() });
+                                             localStorage.setItem('pendingUploads', JSON.stringify(arr2));
+                                             ok2 = true;
+                                         }
+                                     } catch (e2) { lastError2 = e2.message || String(e2); }
+                                     if (!ok2) { console.warn('保留原图上传失败', lastError2); }
                                  } catch (e) {
                                      console.warn('保留原图异常', e);
                                  }
@@ -1405,79 +1427,78 @@
                 // 显示保存状态
                 uploadStatus.innerHTML = '<span style="color: var(--primary-color);">保存中...</span>';
                 
-                // 调用 Netlify Function 保存到 GitHub 仓库
+                // 使用 CloudBase 发布到论坛/集合
                 (async () => {
                     try {
-                        const repo = 'Silent-Tiga/my-private-novel';
+                        const db = window.cloudbaseDb;
+                        const auth = window.cloudbaseAuth;
+                        if (!db || !auth || typeof auth.getCurrentUser !== 'function') {
+                            throw new Error('CloudBase 未初始化或用户未登录');
+                        }
+                        const cu = await auth.getCurrentUser();
+                        const collections = window.cloudbaseCollections || {};
+                        const postsCol = collections.posts || 'posts';
+                        const novelsCol = collections.novels || 'novels';
+                        const now = Date.now();
+                        const tagsArr = tags ? tags.split(',').map(t => t.trim()).filter(Boolean) : [];
+
                         const slugify = (s) => {
-                            const base = s.toLowerCase().trim()
+                            const base = (s || '').toLowerCase().trim()
                                 .replace(/\s+/g, '-')
                                 .replace(/[^\p{L}\p{N}\-]+/gu, '')
                                 .replace(/-+/g, '-')
                                 .replace(/^-+|-+$/g, '');
-                            return base || ('untitled-' + Date.now());
+                            return base || ('untitled-' + now);
                         };
-                        const base = 'content/novel-collections';
-                        let targetPath = '';
-                        let title = '';
-                        if (type === 'collection') {
-                            title = collectionName;
-                            targetPath = `${base}/${slugify(collectionName)}/_index.md`;
-                        } else if (type === 'volume') {
-                            title = volumeName;
-                            targetPath = `${base}/${slugify(collectionName)}/${slugify(volumeName)}/_index.md`;
-                        } else if (type === 'chapter') {
-                            title = chapterTitle;
-                            targetPath = `${base}/${slugify(collectionName)}/${slugify(volumeName)}/${slugify(chapterTitle)}.md`;
-                        } else if (type === 'discussion') {
-                            title = discussionTitle;
-                            const dateSlug = new Date().toISOString().slice(0,19).replace(/[-:T]/g,'');
-                            targetPath = `content/forum/${dateSlug}-${slugify(discussionTitle)}.md`;
+
+                        let doc = null;
+                        if (type === 'discussion') {
+                            doc = {
+                                type: 'discussion',
+                                title: discussionTitle,
+                                content,
+                                tags: tagsArr,
+                                authorUid: cu.uid,
+                                authorEmail: cu.email || '',
+                                createdAt: now,
+                                updatedAt: now,
+                                status: isDraft ? 'draft' : 'published',
+                                visibility: isPublic ? 'public' : 'private'
+                            };
+                            await db.collection(postsCol).add(doc);
+                            uploadStatus.innerHTML = '<span style="color: green;">已发布到论坛（CloudBase）</span>';
+                        } else if (type === 'collection' || type === 'volume' || type === 'chapter') {
+                            const baseSlug = slugify(collectionName);
+                            const volumeSlug = slugify(volumeName);
+                            const chapterSlug = slugify(chapterTitle);
+                            doc = {
+                                type,
+                                title: type === 'collection' ? collectionName : (type === 'volume' ? volumeName : chapterTitle),
+                                content,
+                                tags: tagsArr,
+                                authorUid: cu.uid,
+                                authorEmail: cu.email || '',
+                                collectionSlug: baseSlug,
+                                volumeSlug: volumeSlug,
+                                chapterSlug: chapterSlug,
+                                createdAt: now,
+                                updatedAt: now,
+                                status: isDraft ? 'draft' : 'published',
+                                visibility: isPublic ? 'public' : 'private'
+                            };
+                            await db.collection(novelsCol).add(doc);
+                            uploadStatus.innerHTML = '<span style="color: green;">已保存到小说集合（CloudBase）</span>';
+                        } else {
+                            throw new Error('不支持的类型');
                         }
-                        const fm = {
-                            title,
-                            draft: !!isDraft,
-                            date: new Date().toISOString(),
-                            tags: tags ? tags.split(',').map(t => t.trim()).filter(Boolean) : [],
-                            type: type
-                        };
-                        const body = {
-                            repo,
-                            path: targetPath,
-                            action: 'create_entry',
-                            title,
-                            draft: !!isDraft,
-                            frontmatter: fm,
-                            content,
-                            message: `Create ${type}: ${title}`
-                        };
-                        const jwt = (window.__ACCESS__ && window.__ACCESS__.jwt) || localStorage.getItem('jwt') || '';
-                        const bases = ['/.netlify/functions', 'http://localhost:8888/.netlify/functions'];
-                        let ok = false; let json = null; let lastError = '';
-                        for (const b of bases) {
-                            try {
-                                const res = await fetch(`${b}/update-md`, {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json', ...(jwt ? { 'Authorization': `Bearer ${jwt}` } : {}) },
-                                    body: JSON.stringify(body)
-                                });
-                                const ct = res.headers.get('content-type') || '';
-                                if (ct.includes('application/json')) {
-                                    json = await res.json();
-                                }
-                                if (res.ok && json) { ok = true; break; }
-                                lastError = json && json.error ? json.error : `HTTP ${res.status}`;
-                            } catch (e) { lastError = e.message; }
-                        }
-                        if (!ok) throw new Error(lastError || '后端函数不可用，请使用 netlify dev 本地运行或部署到 Netlify');
-                        uploadStatus.innerHTML = '<span style="color: green;">保存成功，Netlify 将自动重新构建。</span>';
+
                         setTimeout(function() {
                             modal.style.display = 'none';
                             uploadStatus.innerHTML = '';
                             uploadForm.reset();
                         }, 1500);
                     } catch (err) {
-                        uploadStatus.innerHTML = `<span style="color: red;">保存失败：${err.message}</span>`;
+                        uploadStatus.innerHTML = `<span style=\"color: red;\">保存失败：${err.message}</span>`;
                     }
                 })();
             });
@@ -1486,20 +1507,26 @@
         // 在页面加载完成后初始化上传器
         document.addEventListener('DOMContentLoaded', function() {
             // 检查用户是否登录并有写权限
-            const user = getCurrentUser();
-            if (user && hasPermission('write')) {
+            const user = getLocalUser();
+            const OFFLINE = document.getElementById('site-mode')?.dataset.offline === 'true';
+            if (!OFFLINE && user && hasPermission('write')) {
                 initUploader();
             }
         });
     </script>
+    {{ if .Site.Params.offline }}
+    <div id="login-component" style="position: fixed; bottom: 30px; right: 30px; z-index: 1000; background: white; border: 1px solid var(--border-color); border-radius: 8px; padding: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.15);">
+      {{ partial "login.html" . }}
+    </div>
+    {{ end }}
 </body>
 </html>
 <script>
   window.CF_MEDIA_BASE = window.CF_MEDIA_BASE || 'https://your-worker-subdomain.workers.dev';
   function getAuthJWTForMedia() {
     try {
-      const token = localStorage.getItem('authToken') || '';
-      return token;
+      const user = getLocalUser();
+      return (user && user.uid) ? user.uid : '';
     } catch(e) { return ''; }
   }
   function cfMediaUrl(key) {

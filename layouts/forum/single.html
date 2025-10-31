@@ -1,0 +1,35 @@
+{{ define "main" }}
+<article class="container" style="max-width:980px;">
+  <header style="margin-bottom:1rem;">
+    <h1 id="post-title">加载中…</h1>
+    <div id="post-meta" style="color:#666;"></div>
+  </header>
+  <section id="post-content" style="margin-bottom:1rem;color:var(--text-color);"></section>
+  <section>
+    <h3 style="margin:.5rem 0;">回复</h3>
+    <div id="post-replies"></div>
+  </section>
+</article>
+<script>
+(function(){
+  const db = window.cloudbaseDb;
+  const col = (window.cloudbaseCollections && window.cloudbaseCollections.posts) || 'posts';
+  function qs(name){ const u=new URL(location.href); return u.searchParams.get(name); }
+  const id = qs('id');
+  async function load(){
+    if (!db || !id) { document.getElementById('post-title').textContent = '未找到帖子'; return; }
+    try {
+      const res = await db.collection(col).doc(id).get();
+      const p = (res && res.data && res.data[0]) || null;
+      if (!p) { document.getElementById('post-title').textContent = '帖子不存在'; return; }
+      document.getElementById('post-title').textContent = p.title || '(无标题)';
+      document.getElementById('post-meta').textContent = `${p.author||'匿名'} · ${(p.date?new Date(p.date).toLocaleString(): '')}`;
+      document.getElementById('post-content').innerHTML = (p.content||'');
+      const replies = Array.isArray(p.replies) ? p.replies : [];
+      document.getElementById('post-replies').innerHTML = replies.map(r => `<div style='border-top:1px solid var(--border-color);padding:.5rem 0;'><div style='color:#888;'>${r.author||'匿名'} · ${r.date?new Date(r.date).toLocaleString():''}</div><div>${r.content||''}</div></div>`).join('') || '<div style="color:#888;">暂无回复</div>';
+    } catch(e){ console.error('加载帖子失败', e); document.getElementById('post-title').textContent = '加载失败'; }
+  }
+  document.addEventListener('DOMContentLoaded', load);
+})();
+</script>
+{{ end }}

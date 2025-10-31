@@ -1,5 +1,29 @@
-<nav>
-    {{ range .Site.Menus.main }}
-        <a href="{{ .URL }}">{{ .Name }}</a>
+<style>
+  .nav-bar { display:flex; gap:18px; align-items:center; padding:8px 0; border-bottom:1px solid var(--border-color); }
+  .nav-item { position:relative; }
+  .nav-link { text-decoration:none; color:var(--text-color); font-weight:600; padding:6px 8px; border-radius:6px; }
+  .nav-link:hover { background:#eef2ff; color:#1d4ed8; }
+  .dropdown { position:relative; }
+  .dropdown .nav-link::after { content:" ▾"; font-weight:400; }
+  .dropdown-menu { position:absolute; top:100%; left:0; min-width:200px; background:white; border:1px solid #e5e7eb; border-radius:8px; box-shadow:0 4px 12px rgba(0,0,0,.08); padding:8px; display:none; z-index:100; }
+  .dropdown:hover .dropdown-menu { display:block; }
+  .dropdown-item { display:flex; justify-content:space-between; align-items:center; text-decoration:none; color:#334155; padding:8px 10px; border-radius:6px; }
+  .dropdown-item:hover { background:#f1f5f9; }
+</style>
+<nav class="nav-bar">
+  {{/* 顶级菜单（带下拉） */}}
+  {{ range .Site.Menus.main }}
+    {{ if .HasChildren }}
+      <div class="nav-item dropdown">
+        <a class="nav-link" href="{{ .URL }}">{{ .Name }}</a>
+        <div class="dropdown-menu">
+          {{ range .Children }}
+            <a class="dropdown-item" href="{{ .URL }}">{{ .Name }}<span>›</span></a>
+          {{ end }}
+        </div>
+      </div>
+    {{ else if not .Parent }}
+      <div class="nav-item"><a class="nav-link" href="{{ .URL }}">{{ .Name }}</a></div>
     {{ end }}
+  {{ end }}
 </nav>

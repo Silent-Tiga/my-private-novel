@@ -39,25 +39,36 @@
       <button id="apply-filter" style="padding:8px 12px; margin-left:6px; border:1px solid var(--border-color); border-radius:4px; cursor:pointer;">过滤</button>
     </div>
   </div>
-  <div id="threads-container">
-    {{ $pages := where .Site.RegularPages "Params.type" "discussion" }}
-    {{ $pages = sort $pages "Date" "desc" }}
-    {{ range $pages }}
-      <div class="thread-item" data-tags="{{ with .Params.tags }}{{ delimit . "," }}{{ end }}" style="border:1px solid var(--border-color); border-radius:8px; padding:12px; margin-bottom:12px;">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-          <div>
-            <a href="{{ .RelPermalink }}" style="font-weight:600; color:var(--primary-color); text-decoration:none;">{{ .Title }}</a>
-            <div style="color:var(--light-text); font-size:0.85rem;">{{ .Date.Format "2006-01-02" }} · {{ with .Params.tags }}{{ delimit . ", " }}{{ end }}</div>
-          </div>
-        </div>
-        <div style="margin-top:8px; color:var(--text-color)">{{ .Summary }}</div>
-      </div>
-    {{ end }}
-  </div>
+  <div id="threads-container"></div>
 </div>
 
 <script>
   const THREADS_KEY = 'forum_threads';
+  document.addEventListener('DOMContentLoaded', loadDiscussionsFromCloudBase);
+  async function loadDiscussionsFromCloudBase(){
+    try {
+      const db = window.cloudbaseDb;
+      const col = (window.cloudbaseCollections && window.cloudbaseCollections.posts) || 'posts';
+      if (!db) return;
+      const res = await db.collection(col).where({ type: 'discussion' }).orderBy('date','desc').limit(50).get();
+      const list = (res && res.data) || [];
+      const container = document.getElementById('threads-container');
+      list.forEach(post => {
+        const t = {
+          id: post._id,
+          title: post.title || '(无标题)',
+          author: post.author || '匿名',
+          content: post.content || '',
+          tags: Array.isArray(post.tags) ? post.tags : [],
+          likes: post.likes || 0,
+          date: post.date || post._updateTime || new Date().toISOString(),
+          replies: Array.isArray(post.replies) ? post.replies : []
+        };
+        container.appendChild(threadItem(t));
+      });
+      renderThreads();
+    } catch(e) { console.warn('CloudBase 加载讨论失败', e); }
+  }
 
   function hasWritePermission() {
     try {
@@ -122,58 +133,60 @@
   function threadItem(thread) {
     const div = document.createElement('div');
     div.className = 'thread-item';
-    div.style.border = '1px solid var(--border-color)';
-    div.style.borderRadius = '8px';
-    div.style.padding = '12px';
-    div.style.marginBottom = '12px';
+    div.style.border = '1px solid #e5e7eb';
+    div.style.borderRadius = '10px';
+    div.style.padding = '14px';
+    div.style.marginBottom = '14px';
+    div.style.background = 'var(--card-bg-color)';
+    div.style.boxShadow = '0 1px 3px rgba(0,0,0,.06)';
 
-    const tagsHtml = (thread.tags || []).map(tag => `<span style="background:#eef3ff; color:#3a7bd5; padding:2px 6px; border-radius:4px; margin-right:4px; font-size:12px;">${escapeHtml(tag)}</span>`).join('');
+    const tagsHtml = (thread.tags || []).map(tag => `<span style="background:#eef2ff; color:#1d4ed8; padding:2px 8px; border:1px solid #c7d2fe; border-radius:9999px; margin-right:8px; font-size:12px;">${escapeHtml(tag)}</span>`).join('');
 
     div.innerHTML = `
-      <div style="display:flex; justify-content:space-between; align-items:center;">
-        <h4 style="margin:0;">${escapeHtml(thread.title)}</h4>
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+        <h4 style="margin:0; font-size:1.1rem;">${escapeHtml(thread.title)}</h4>
         <div style="display:flex; gap:8px;">
-          ${canEdit(thread) ? `<button class="edit-thread" data-id="${thread.id}" style="padding:6px 10px; background:#3a7bd5; color:white; border:none; border-radius:4px; cursor:pointer;">编辑</button>` : ''}
-          ${canDelete() ? `<button class="delete-thread" data-id="${thread.id}" style="padding:6px 10px; background:#e74c3c; color:white; border:none; border-radius:4px; cursor:pointer;">删除</button>` : ''}
+          ${canEdit(thread) ? `<button class="edit-thread" data-id="${thread.id}" style="padding:6px 10px; background:#2563eb; color:white; border:none; border-radius:6px; cursor:pointer;">编辑</button>` : ''}
+          ${canDelete() ? `<button class="delete-thread" data-id="${thread.id}" style="padding:6px 10px; background:#ef4444; color:white; border:none; border-radius:6px; cursor:pointer;">删除</button>` : ''}
         </div>
       </div>
-      <div style="color:var(--light-text); font-size: 0.9rem; margin:4px 0 8px;">由 ${escapeHtml(thread.author)} 发布 · ${formatDate(thread.date)}</div>
-      <div class="thread-content" style="margin: 8px 0;">${formatContent(thread.content)}</div>
+      <div style="color:var(--light-text); font-size: 0.9rem; margin:6px 0 10px;">由 ${escapeHtml(thread.author)} 发布 · ${formatDate(thread.date)}</div>
+      <div class="thread-content" style="margin: 10px 0; line-height:1.7; word-break:break-word;">${formatContent(thread.content)}</div>
       <div>${tagsHtml}</div>
-      <div style="display:flex; gap:10px; margin-top:8px;">
-        <button class="like-thread" data-id="${thread.id}" style="padding:6px 10px; border:1px solid var(--border-color); border-radius:4px; cursor:pointer;">赞 ${thread.likes || 0}</button>
-        <button class="toggle-reply" data-id="${thread.id}" style="padding:6px 10px; border:1px solid var(--border-color); border-radius:4px; cursor:pointer;">回复</button>
+      <div style="display:flex; gap:10px; margin-top:10px;">
+        <button class="like-thread" data-id="${thread.id}" style="padding:6px 10px; border:1px solid #e5e7eb; border-radius:6px; cursor:pointer; background:white;">赞 ${thread.likes || 0}</button>
+        <button class="toggle-reply" data-id="${thread.id}" style="padding:6px 10px; border:1px solid #e5e7eb; border-radius:6px; cursor:pointer; background:white;">回复</button>
       </div>
-      <div id="edit-form-${thread.id}" style="display:none; margin-top:8px;">
+      <div id="edit-form-${thread.id}" style="display:none; margin-top:10px;">
         <form class="edit-form" data-id="${thread.id}">
-          <div style="margin-bottom:6px;">
+          <div style="margin-bottom:8px;">
             <label style="display:block; margin-bottom:4px;">标题</label>
-            <input class="edit-title" type="text" value="${escapeHtml(thread.title)}" style="width:100%; padding:8px; border:1px solid var(--border-color); border-radius:4px;" />
+            <input class="edit-title" type="text" value="${escapeHtml(thread.title)}" style="width:100%; padding:8px; border:1px solid var(--border-color); border-radius:6px;" />
           </div>
-          <div style="margin-bottom:6px;">
+          <div style="margin-bottom:8px;">
             <label style="display:block; margin-bottom:4px;">内容</label>
-            <textarea class="edit-content" rows="4" style="width:100%; padding:8px; border:1px solid var(--border-color); border-radius:4px;">${escapeHtml(thread.content)}</textarea>
+            <textarea class="edit-content" rows="4" style="width:100%; padding:8px; border:1px solid var(--border-color); border-radius:6px;">${escapeHtml(thread.content)}</textarea>
           </div>
-          <div style="margin-bottom:6px;">
+          <div style="margin-bottom:8px;">
             <label style="display:block; margin-bottom:4px;">标签（逗号分隔）</label>
-            <input class="edit-tags" type="text" value="${(thread.tags||[]).join(', ')}" style="width:100%; padding:8px; border:1px solid var(--border-color); border-radius:4px;" />
+            <input class="edit-tags" type="text" value="${(thread.tags||[]).join(', ')}" style="width:100%; padding:8px; border:1px solid var(--border-color); border-radius:6px;" />
           </div>
           <div style="display:flex; gap:10px;">
-            <button type="submit" style="padding:6px 10px; background:#3a7bd5; color:white; border:none; border-radius:4px; cursor:pointer;">保存修改</button>
-            <button type="button" class="cancel-edit" data-id="${thread.id}" style="padding:6px 10px; border:1px solid var(--border-color); border-radius:4px; cursor:pointer;">取消</button>
+            <button type="submit" style="padding:6px 10px; background:#2563eb; color:white; border:none; border-radius:6px; cursor:pointer;">保存修改</button>
+            <button type="button" class="cancel-edit" data-id="${thread.id}" style="padding:6px 10px; border:1px solid #e5e7eb; border-radius:6px; cursor:pointer; background:white;">取消</button>
           </div>
         </form>
       </div>
-      <div id="reply-form-${thread.id}" style="display:none; margin-top:8px;">
+      <div id="reply-form-${thread.id}" style="display:none; margin-top:10px;">
         <form class="reply-form" data-id="${thread.id}">
-          <textarea class="reply-content" rows="3" style="width:100%; padding:8px; border:1px solid var(--border-color); border-radius:4px;" placeholder="回复 ${escapeHtml(thread.author)}..."></textarea>
-          <div style="display:flex; gap:10px; margin-top:6px;">
-            <button type="submit" style="padding:6px 10px; background:var(--primary-color); color:white; border:none; border-radius:4px; cursor:pointer;">提交回复</button>
-            <button type="button" class="cancel-reply" data-id="${thread.id}" style="padding:6px 10px; border:1px solid var(--border-color); border-radius:4px; cursor:pointer;">取消</button>
+          <textarea class="reply-content" rows="3" style="width:100%; padding:8px; border:1px solid var(--border-color); border-radius:6px;" placeholder="回复 ${escapeHtml(thread.author)}..."></textarea>
+          <div style="display:flex; gap:10px; margin-top:8px;">
+            <button type="submit" style="padding:6px 10px; background:var(--primary-color); color:white; border:none; border-radius:6px; cursor:pointer;">提交回复</button>
+            <button type="button" class="cancel-reply" data-id="${thread.id}" style="padding:6px 10px; border:1px solid #e5e7eb; border-radius:6px; cursor:pointer; background:white;">取消</button>
           </div>
         </form>
       </div>
-      <div class="thread-replies" id="replies-${thread.id}" style="margin-top:10px;">${renderReplies(thread.replies || [])}</div>
+      <div class="thread-replies" id="replies-${thread.id}" style="margin-top:12px;">${renderReplies(thread.replies || [])}</div>
     `;
 
     // 事件
@@ -212,9 +225,9 @@
 
   function replyItem(r) {
     return `
-      <div style="border-top:1px solid var(--border-color); padding-top:8px; margin-top:8px;">
-        <div style="color:var(--light-text); font-size:0.9rem;">${escapeHtml(r.author)} · ${formatDate(r.date)}</div>
-        <div>${formatContent(r.content)}</div>
+      <div style="border-top:1px solid #e5e7eb; padding-top:10px; margin-top:10px; background:#fafafa; border-radius:6px; padding:10px;">
+        <div style="color:var(--light-text); font-size:0.9rem; margin-bottom:6px;">${escapeHtml(r.author)} · ${formatDate(r.date)}</div>
+        <div style="line-height:1.6; word-break:break-word;">${formatContent(r.content)}</div>
       </div>
     `;
   }
@@ -375,25 +388,44 @@
 
         status.textContent = '发布中...';
         try {
-          const jwt = localStorage.getItem('authToken') || '';
           const slugBase = title.toLowerCase().replace(/[^a-z0-9_\-]+/g, '-').replace(/-+/g,'-');
-          const mdPath = `content/forum/discussion/${slugBase}.md`;
-          const payload = { frontmatter: { title, type: 'discussion', tags, draft: false }, content };
-          const body = { repo: 'Silent-Tiga/my-private-novel', path: mdPath, action: 'create_entry', payload, message: `Create discussion: ${title}` };
-          const bases = ['/.netlify/functions', 'http://localhost:8888/.netlify/functions'];
-          let ok = false; let lastError = ''; let json = null;
-          for (const b of bases) {
+          const record = { title, content, tags, authorId: user.id, slug: slugBase, status: 'published', createdAt: new Date().toISOString() };
+          let ok = false; let lastError = '';
+          try {
+            let db = null;
+            if (window.cloudbaseDb) {
+              db = window.cloudbaseDb;
+            } else if (window.cloudbase && window.cloudbase.CloudBase) {
+              const envId = window.CLOUDBASE_ENV_ID || '';
+              const app = window.cloudbase.init({ env: envId });
+              db = app.database();
+            }
+            if (db) {
+              const res = await db.collection('forum_threads').add(record);
+              ok = !!res && (!!res.id || !!res._id);
+            }
+          } catch (err) {
+            lastError = err && err.message ? err.message : String(err);
+          }
+          let offlineSaved = false;
+          if (!ok) {
             try {
-              const res = await fetch(`${b}/update-md`, { method:'POST', headers: { 'Content-Type':'application/json', ...(jwt? { 'Authorization': `Bearer ${jwt}` } : {}) }, body: JSON.stringify(body) });
-              const ct = res.headers.get('content-type') || ''; if (ct.includes('application/json')) json = await res.json();
-              if (res.ok && json) { ok = true; break; }
-              lastError = json && json.error ? json.error : `HTTP ${res.status}`;
-            } catch(err) { lastError = err.message; }
+              const arr = JSON.parse(localStorage.getItem('offlineThreads') || '[]');
+              arr.push(record);
+              localStorage.setItem('offlineThreads', JSON.stringify(arr));
+              ok = true;
+              offlineSaved = true;
+              status.textContent = '已离线保存，将在恢复后同步。';
+            } catch(e2) {
+              lastError = lastError || (e2 && e2.message ? e2.message : String(e2));
+            }
           }
           if (!ok) { status.textContent = `发布失败：${lastError}`; return; }
           form.reset();
-          status.textContent = '发布成功！';
-          window.location.href = `/forum/discussion/${slugBase}/`;
+          status.textContent = offlineSaved ? '草稿已保存到本地队列' : '发布成功！';
+          if (!offlineSaved) {
+            window.location.href = `/forum/discussion/${slugBase}/`;
+          }
         } catch(err) {
           status.textContent = `发布失败：${err.message}`;
         }

@@ -1,0 +1,32 @@
+{{ define "main" }}
+<section class="container">
+  <header>
+    <h1>全部页面</h1>
+    <input id="search-all" type="search" placeholder="搜索标题或标签..." style="width:100%;padding:.5rem;margin:.5rem 0;" />
+  </header>
+  <ul id="all-pages" style="list-style:none;padding:0;">
+    {{ range .Site.RegularPages }}
+      <li class="page" data-title="{{ .Title }}" data-tags="{{ with .Params.tags }}{{ delimit . "," }}{{ end }}" style="border-bottom:1px solid #eee;padding:.6rem 0;">
+        <a href="{{ .RelPermalink }}">{{ .Title }}</a>
+        {{ with .Type }}<span style="color:#999;"> · {{ . }}</span>{{ end }}
+        {{ with .Params.tags }}<span style="color:#999;"> · {{ delimit . ", " }}</span>{{ end }}
+      </li>
+    {{ end }}
+  </ul>
+</section>
+<script>
+(function(){
+  const q = document.getElementById('search-all');
+  const items = Array.from(document.querySelectorAll('#all-pages .page'));
+  q && q.addEventListener('input', function(){
+    const s = this.value.trim().toLowerCase();
+    items.forEach(li => {
+      const t = li.dataset.title.toLowerCase();
+      const tags = (li.dataset.tags||'').toLowerCase();
+      const show = !s || t.includes(s) || tags.includes(s);
+      li.style.display = show ? '' : 'none';
+    });
+  });
+})();
+</script>
+{{ end }}

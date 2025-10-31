@@ -1,0 +1,28 @@
+{{ define "main" }}
+<article class="container" style="max-width:920px;">
+  <header>
+    <h1>{{ .Title }}</h1>
+    {{ with .Params.author }}<div style="color:#666;">作者：{{ . }}</div>{{ end }}
+    {{ with .Params.year }}<div style="color:#666;">年份：{{ . }}</div>{{ end }}
+  </header>
+  <section style="display:grid;grid-template-columns:300px 1fr;gap:1rem;margin-top:1rem;">
+    <aside style="border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+      {{ with .Params.cover }}<img src="{{ . }}" alt="{{ $.Title }}" style="width:100%;object-fit:cover;"/>{{ end }}
+      <div style="padding:.75rem;">
+        {{ with .Params.genres }}<div><strong>类型：</strong>{{ delimit . ", " }}</div>{{ end }}
+        {{ with .Params.publisher }}<div><strong>出版：</strong>{{ . }}</div>{{ end }}
+        {{ with .Params.links }}
+          <div style="margin-top:.5rem;">
+            {{ with .official }}<div><a href="{{ . }}" target="_blank" rel="noopener">官方链接</a></div>{{ end }}
+            {{ with .wiki }}<div><a href="{{ . }}" target="_blank" rel="noopener">外部百科</a></div>{{ end }}
+          </div>
+        {{ end }}
+        {{ with .Params.tags }}<div style="margin-top:.5rem;color:#666;">标签：{{ delimit . ", " }}</div>{{ end }}
+      </div>
+    </aside>
+    <div>
+      {{ .Content }}
+    </div>
+  </section>
+</article>
+{{ end }}

@@ -1,0 +1,19 @@
+{{ define "main" }}
+<section class="container">
+  <header>
+    <h1>精选角色</h1>
+  </header>
+  <div class="grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:1rem;">
+    {{ $chars := where .Site.RegularPages "Type" "character" }}
+    {{ range where $chars "Params.featured" true }}
+      <article class="card" style="border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+        {{ with .Params.image }}<a href="{{ $.RelPermalink }}"><img src="{{ . }}" alt="{{ $.Title }}" style="width:100%;height:160px;object-fit:cover;"/></a>{{ end }}
+        <div style="padding:.75rem;">
+          <h3 style="margin:.2rem 0;"><a href="{{ .RelPermalink }}">{{ .Title }}</a></h3>
+          {{ with .Params.series }}<div style="font-size:.9rem;color:#666;">{{ . }}</div>{{ end }}
+        </div>
+      </article>
+    {{ end }}
+  </div>
+</section>
+{{ end }}

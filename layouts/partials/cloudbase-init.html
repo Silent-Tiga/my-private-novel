@@ -1,0 +1,82 @@
+{{- $cb := .Site.Params.cloudbase -}}
+{{- if and $cb $cb.enabled $cb.envId -}}
+<script id="cloudbase-config" type="application/json">
+{
+  "envId": {{ $cb.envId | jsonify }},
+  "collections": {
+    "users": {{ $cb.collections.users | default "users" | jsonify }},
+    "posts": {{ $cb.collections.posts | default "posts" | jsonify }},
+    "novels": {{ $cb.collections.novels | default "novels" | jsonify }},
+    "site_settings": {{ $cb.collections.site_settings | default "site_settings" | jsonify }}
+  }
+}
+</script>
+<script>
+  (function(){
+    var sources = [
+      '/lib/cloudbase.full.js',
+      '/lib/cloudbase.min.js',
+      'https://static.cloudbase.net/cloudbase-js-sdk/2.21.6/cloudbase.full.js?v=1',
+      'https://unpkg.com/@cloudbase/js-sdk/dist/cloudbase.min.js',
+      'https://cdn.jsdelivr.net/npm/@cloudbase/js-sdk/dist/cloudbase.min.js',
+      'https://imgcache.qq.com/qcloud/cloudbase-js-sdk/1.7.2/cloudbase.min.js'
+    ];
+    function load(i){
+      if(i >= sources.length){
+        console.error('[CloudBase] SDK 加载失败（所有源不可用）');
+        init(false);
+        return;
+      }
+      var s = document.createElement('script');
+      s.src = sources[i];
+      s.referrerPolicy = 'no-referrer';
+      s.crossOrigin = 'anonymous';
+      s.onload = function(){ init(true); };
+      s.onerror = function(){ console.warn('[CloudBase] SDK 源失败：', sources[i]); load(i+1); };
+      document.head.appendChild(s);
+    }
+    function init(hasSdk){
+      try {
+        if(!hasSdk || typeof cloudbase === 'undefined'){
+          throw new Error('cloudbase is not defined');
+        }
+        var cfgEl = document.getElementById('cloudbase-config');
+        var cfg = {};
+        try { cfg = JSON.parse((cfgEl && cfgEl.textContent) || '{}'); } catch(_) {}
+        var envId = cfg.envId || '';
+        try { envId = (envId || '').replace(/"/g, '').trim(); } catch(_) {}
+        var app = cloudbase.init({ env: envId });
+        var auth = app.auth({ persistence: 'local' });
+        var db = app.database();
+        window.cloudbaseApp = app;
+        window.cloudbaseAuth = auth;
+        window.cloudbaseDb = db;
+        window.cloudbaseCollections = cfg.collections || {};
+        window.CLOUDBASE_ENV_ID = envId;
+        console.log('[CloudBase] 初始化成功', { envId, version: cloudbase.version });
+        console.log('[CloudBase] auth 实例：', auth);
+        try {
+          var isLocalHost = (location.hostname === '127.0.0.1' || location.hostname === 'localhost');
+          var hasUser = !!(auth && auth.currentUser);
+          var supportsAnon = !!(auth && (auth.anonymousAuthProvider || auth.signInAnonymously));
+          var autoAnon = !isLocalHost; // 仅在生产环境自动匿名登录，开发环境禁用以避免触发线上鉴权端点
+          if (!hasUser && supportsAnon && autoAnon) {
+            if (auth.anonymousAuthProvider) {
+              auth.anonymousAuthProvider().signIn().catch(function(e){ console.warn('[CloudBase] 匿名登录失败', e); });
+            } else if (auth.signInAnonymously) {
+              auth.signInAnonymously().catch(function(e){ console.warn('[CloudBase] 匿名登录失败', e); });
+            }
+          } else if (!autoAnon) {
+            console.log('[CloudBase] 开发环境：已禁用自动匿名登录');
+          }
+        } catch(_){}
+      } catch (e) {
+        console.error('[CloudBase] 初始化失败', e);
+      }
+    }
+    load(0);
+  })();
+</script>
+{{- else -}}
+<!-- CloudBase 未启用或缺少 envId -->
+{{- end -}}

@@ -86,38 +86,66 @@
         commentsPagination.innerHTML = '';
         try {
             const postId = commentConfig.postId;
-            const resp = await fetch('/.netlify/functions/save-comment?post_id=' + encodeURIComponent(postId));
-            const data = await resp.json();
-            const items = Array.isArray(data.items) ? data.items : [];
-    
-            // 归一化为旧结构（根评论 + 嵌套 replies）
-            const byId = new Map();
-            items.forEach(item => {
-                byId.set(item.id, {
-                    id: item.id,
-                    author: item.author,
-                    content: item.content,
-                    date: item.createdAt || item.date,
-                    likes: item.upvotes || item.likes || 0,
-                    replies: []
-                });
-            });
-            items.forEach(item => {
-                if (item.parentId && byId.has(item.parentId) && byId.has(item.id)) {
-                    const parent = byId.get(item.parentId);
-                    parent.replies.push({
+            if (window.cloudbaseDb) {
+                const col = window.cloudbaseDb.collection(window.cloudbaseCollections && window.cloudbaseCollections.posts || 'posts');
+                const res = await col.doc(postId).get();
+                const doc = res && res.data && res.data[0];
+                const items = (doc && doc.comments) ? doc.comments : [];
+                // 归一化为旧结构（根评论 + 嵌套 replies）
+                const byId = new Map();
+                items.forEach(item => {
+                    byId.set(item.id, {
                         id: item.id,
                         author: item.author,
-                        to: parent.author,
                         content: item.content,
-                        date: item.createdAt || item.date
+                        date: item.createdAt || item.date,
+                        likes: item.upvotes || item.likes || 0,
+                        replies: []
                     });
-                }
-            });
-            const roots = items.filter(i => !i.parentId).map(i => byId.get(i.id)).filter(Boolean);
-            displayComments(roots);
+                });
+                items.forEach(item => {
+                    if (item.parentId && byId.has(item.parentId) && byId.has(item.id)) {
+                        const parent = byId.get(item.parentId);
+                        parent.replies.push({
+                            id: item.id,
+                            author: item.author,
+                            to: parent.author,
+                            content: item.content,
+                            date: item.createdAt || item.date
+                        });
+                    }
+                });
+                const roots = items.filter(i => !i.parentId).map(i => byId.get(i.id)).filter(Boolean);
+                displayComments(roots);
+            } else {
+                commentsContainer.innerHTML = '<div class="comment-loading">CloudBase 未初始化，无法加载评论</div>';
+            }
         } catch (e) {
-            commentsContainer.innerHTML = '<div class="comment-loading">评论加载失败</div>';
+            // 针对未认证错误的提示与回退
+            const msg = (e && (e.error_description || e.message || '')) || '';
+            if (/unauthenticated|credentials\s+not\s+found/i.test(msg)) {
+                commentsContainer.innerHTML = '<div class="comment-loading">未登录或权限不足，尝试匿名登录后重试…</div>';
+                try {
+                    const auth = window.cloudbaseAuth;
+                    if (auth && (auth.anonymousAuthProvider || auth.signInAnonymously)) {
+                        if (auth.anonymousAuthProvider) { await auth.anonymousAuthProvider().signIn(); }
+                        else if (auth.signInAnonymously) { await auth.signInAnonymously(); }
+                        // 登录成功后重新加载
+                        await loadComments();
+                        return;
+                    }
+                } catch(_){}
+            }
+            // 本地回退：显示浏览器本地缓存的评论
+            try {
+                const localComments = getCommentsFromStorage(commentConfig.postId);
+                displayComments(localComments);
+                if (!localComments || localComments.length === 0) {
+                    commentsContainer.innerHTML = '<div class="comment-loading">评论加载失败或无权限；暂无本地评论</div>';
+                }
+            } catch(_) {
+                commentsContainer.innerHTML = '<div class="comment-loading">评论加载失败</div>';
+            }
             console.error('加载评论失败:', e);
         }
     }
@@ -275,11 +303,39 @@
         showSubmitStatus('提交中...', 'loading');
         (async () => {
             try {
-                const jwt = localStorage.getItem('authToken') || '';
-                const body = { action:'add', post_id: commentConfig.postId, comment: { author, content, parentId: null }, message: `add comment to ${commentConfig.postId}` };
-                const res = await fetch('/.netlify/functions/save-comment', { method: 'POST', headers: { 'Content-Type':'application/json', ...(jwt? { 'Authorization': `Bearer ${jwt}` } : {}) }, body: JSON.stringify(body) });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data && data.error || `HTTP ${res.status}`);
+                // CloudBase 优先
+                if (window.cloudbaseDb) {
+                    const col = window.cloudbaseDb.collection(window.cloudbaseCollections && window.cloudbaseCollections.posts || 'posts');
+                    const postId = commentConfig.postId;
+                    const res = await col.doc(postId).get();
+                    const doc = res && res.data && res.data[0];
+                    const comments = (doc && doc.comments) ? doc.comments : [];
+                    const newComment = {
+                        id: generateCommentId(),
+                        author,
+                        content,
+                        email,
+                        parentId: null,
+                        upvotes: 0,
+                        date: new Date().toISOString()
+                    };
+                    if (doc) {
+                        await col.doc(postId).update({ comments: comments.concat(newComment) });
+                    } else {
+                        await col.doc(postId).set({ _id: postId, comments: [newComment] });
+                    }
+                } else {
+                    // 本地回退
+                    saveComment(commentConfig.postId, {
+                        id: generateCommentId(),
+                        author,
+                        content,
+                        email,
+                        parentId: null,
+                        upvotes: 0,
+                        date: new Date().toISOString()
+                    });
+                }
                 commentForm.reset();
                 await loadComments();
                 showSubmitStatus('评论提交成功！', 'success');
@@ -301,11 +357,38 @@
         if (!replyContent) { alert('请输入回复内容'); return; }
         (async () => {
             try {
-                const jwt = localStorage.getItem('authToken') || '';
-                const body = { action:'add', post_id: commentConfig.postId, comment: { author: authorName, content: replyContent, parentId: commentId }, message: `reply to ${commentId} on ${commentConfig.postId}` };
-                const res = await fetch('/.netlify/functions/save-comment', { method: 'POST', headers: { 'Content-Type':'application/json', ...(jwt? { 'Authorization': `Bearer ${jwt}` } : {}) }, body: JSON.stringify(body) });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data && data.error || `HTTP ${res.status}`);
+                if (window.cloudbaseDb) {
+                    const col = window.cloudbaseDb.collection(window.cloudbaseCollections && window.cloudbaseCollections.posts || 'posts');
+                    const postId = commentConfig.postId;
+                    const res = await col.doc(postId).get();
+                    const doc = res && res.data && res.data[0];
+                    const comments = (doc && doc.comments) ? doc.comments : [];
+                    const parent = comments.find(c => c.id === commentId);
+                    const newReply = {
+                        id: generateCommentId(),
+                        author: authorName,
+                        content: replyContent,
+                        parentId: commentId,
+                        to: parent ? parent.author : undefined,
+                        upvotes: 0,
+                        date: new Date().toISOString()
+                    };
+                    if (doc) {
+                        await col.doc(postId).update({ comments: comments.concat(newReply) });
+                    } else {
+                        await col.doc(postId).set({ _id: postId, comments: [newReply] });
+                    }
+                } else {
+                    // 本地回退
+                    saveReply(commentConfig.postId, commentId, {
+                        id: generateCommentId(),
+                        author: authorName,
+                        content: replyContent,
+                        parentId: commentId,
+                        upvotes: 0,
+                        date: new Date().toISOString()
+                    });
+                }
                 const replyFormContainer = document.getElementById(`reply-form-${commentId}`);
                 replyFormContainer.style.display = 'none';
                 replyForm.reset();
@@ -451,30 +534,55 @@
         }
     }
 
-    // 切换评论点赞（改为后端持久化）
+    // 切换评论点赞（CloudBase 持久化）
     function toggleCommentLike(postId, commentId) {
         (async () => {
             try {
-                const jwt = localStorage.getItem('authToken') || '';
-                const body = { action:'upvote', post_id: postId, commentId, message: `upvote ${commentId} on ${postId}` };
-                const res = await fetch('/.netlify/functions/save-comment', { method: 'POST', headers: { 'Content-Type':'application/json', ...(jwt? { 'Authorization': `Bearer ${jwt}` } : {}) }, body: JSON.stringify(body) });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data && data.error || `HTTP ${res.status}`);
+                if (window.cloudbaseDb) {
+                    const col = window.cloudbaseDb.collection(window.cloudbaseCollections && window.cloudbaseCollections.posts || 'posts');
+                    const res = await col.doc(postId).get();
+                    const doc = res && res.data && res.data[0];
+                    if (!doc) return;
+                    const comments = (doc && doc.comments) ? doc.comments.slice() : [];
+                    const idx = comments.findIndex(c => c.id === commentId);
+                    if (idx >= 0) {
+                        const target = comments[idx];
+                        comments[idx] = { ...target, upvotes: (target.upvotes || 0) + 1 };
+                        await col.doc(postId).update({ comments });
+                    }
+                } else {
+                    // 本地回退
+                    const comments = getCommentsFromStorage(postId);
+                    const idx = comments.findIndex(c => c.id === commentId);
+                    if (idx >= 0) {
+                        comments[idx].upvotes = (comments[idx].upvotes || 0) + 1;
+                        localStorage.setItem(`comments_${postId}`, JSON.stringify(comments));
+                    }
+                }
             } catch(err) {
                 console.error('点赞失败:', err);
             }
         })();
     }
 
-    // 删除评论（改为后端持久化）
+    // 删除评论（CloudBase 持久化）
     function deleteComment(postId, commentId) {
         (async () => {
             try {
-                const jwt = localStorage.getItem('authToken') || '';
-                const body = { action:'delete', post_id: postId, commentId, message: `delete ${commentId} on ${postId}` };
-                const res = await fetch('/.netlify/functions/save-comment', { method: 'POST', headers: { 'Content-Type':'application/json', ...(jwt? { 'Authorization': `Bearer ${jwt}` } : {}) }, body: JSON.stringify(body) });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data && data.error || `HTTP ${res.status}`);
+                if (window.cloudbaseDb) {
+                    const col = window.cloudbaseDb.collection(window.cloudbaseCollections && window.cloudbaseCollections.posts || 'posts');
+                    const res = await col.doc(postId).get();
+                    const doc = res && res.data && res.data[0];
+                    if (!doc) return;
+                    const comments = (doc && doc.comments) ? doc.comments.slice() : [];
+                    const filtered = comments.filter(c => c.id !== commentId && c.parentId !== commentId);
+                    await col.doc(postId).update({ comments: filtered });
+                } else {
+                    // 本地回退
+                    const comments = getCommentsFromStorage(postId);
+                    const filtered = comments.filter(c => c.id !== commentId && c.parentId !== commentId);
+                    localStorage.setItem(`comments_${postId}`, JSON.stringify(filtered));
+                }
             } catch(err) {
                 console.error('删除评论失败:', err);
             }
@@ -537,32 +645,25 @@
         return `<div class="avatar" style="background-color: ${bgColor};">${firstChar}</div>`;
     }
 
-    // 检查用户登录状态
+    // 检查用户登录状态（CloudBase 版）
     function checkUserLogin() {
-        // 从访问控制系统获取当前用户信息
-        const currentUser = getCurrentUser();
-        
-        if (currentUser && currentUser.name) {
-            commentAuthor.value = currentUser.name;
+        const cu = (window.__CURRENT_USER__) || (window.cloudbaseAuth && window.cloudbaseAuth.currentUser) || null;
+        if (cu) {
+            const name = cu.name || cu.displayName || cu.email || '用户';
+            commentAuthor.value = name;
             commentAuthor.disabled = true;
         }
     }
 
-    // 检查是否为管理员
+    // 检查是否为管理员（CloudBase 版）
     function isAdmin() {
-        const currentUser = getCurrentUser();
-        return currentUser && currentUser.role === 'admin';
+        const currentUser = window.__CURRENT_USER__ || null;
+        return !!currentUser && currentUser.role === 'admin';
     }
 
-    // 从访问控制系统获取当前用户信息
+    // 获取当前用户（CloudBase 统一）
     function getCurrentUser() {
-        try {
-            const userData = localStorage.getItem('currentUser');
-            return userData ? JSON.parse(userData) : null;
-        } catch (error) {
-            console.error('获取用户信息失败:', error);
-            return null;
-        }
+        return window.__CURRENT_USER__ || null;
     }
 
     // 页面加载完成后初始化评论系统
@@ -597,9 +698,7 @@
         font-size: 1.1rem;
     }
     
-    .comment-form-fields {
-        space-y: 1rem;
-    }
+    /* .comment-form-fields 间距由 .form-group 的 margin 控制，无需额外规则 */
     
     .form-group {
         margin-bottom: 1rem;
@@ -667,9 +766,7 @@
         color: var(--error-color);
     }
     
-    .comments-container {
-        space-y: 1.5rem;
-    }
+    /* .comments-container 间距由 .comment-item 的 margin-bottom 控制，无需额外规则 */
     
     .no-comments {
         text-align: center;
@@ -840,8 +937,8 @@
         margin-top: 1rem;
     }
     
-    .replies-list {
-        space-y: 0.75rem;
+    .replies-list > * + * {
+        margin-top: 0.75rem;
     }
     
     .reply-item {

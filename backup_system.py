@@ -23,8 +23,7 @@ CONFIG = {
     'backup_dir': os.path.join(os.path.dirname(__file__), 'backups'),  # 备份存储目录
     'content_dir': os.path.join(os.path.dirname(__file__), 'content'),  # 内容目录
     'config_files': [  # 需要备份的配置文件
-        os.path.join(os.path.dirname(__file__), 'config.yaml'),
-        os.path.join(os.path.dirname(__file__), 'netlify.toml')
+        os.path.join(os.path.dirname(__file__), 'config.yaml')
     ],
     'log_file': os.path.join(os.path.dirname(__file__), 'backup.log'),  # 日志文件
     'max_backups': 30,  # 最大备份数量
